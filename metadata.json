@@ -1,0 +1,6 @@
+{
+  "name": "Online Sheba - Daily Accounts & Sales Management",
+  "description": "Daily Sales, Expense and Accounts Management web app for Online Sheba computer shop, featuring dynamic service categories, quick billing counter, expense tracking, digital receipts, and Supabase integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
