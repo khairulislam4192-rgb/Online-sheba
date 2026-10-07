@@ -1,8 +1,17 @@
 export type PaymentMethod = 'cash' | 'bkash' | 'nagad';
 export type TransactionType = 'sale' | 'expense';
+export type PaperSize = 'thermal' | 'a4';
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  shop_name?: string;
+  created_at?: string;
+}
 
 export interface Category {
   id: string;
+  user_id?: string;
   name: string;
   icon?: string;
   created_at: string;
@@ -10,6 +19,7 @@ export interface Category {
 
 export interface Transaction {
   id: string;
+  user_id?: string;
   type: TransactionType;
   category: string;
   description: string;
@@ -41,12 +51,5 @@ export interface ReceiptData {
   due_amount: number;
   payment_method: PaymentMethod;
   note?: string;
-}
-
-export interface BackendStatus {
-  isSupabaseConnected: boolean;
-  storageProvider: 'supabase' | 'server';
-  supabaseUrl?: string;
-  categoriesCount: number;
-  transactionsCount: number;
+  paper_size?: PaperSize;
 }

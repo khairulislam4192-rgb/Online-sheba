@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Trash2, Search, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileText, Filter } from 'lucide-react';
+import { Trash2, Search, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileText, Filter, Lock, Clock, Check, X } from 'lucide-react';
 import { PaymentMethod, Transaction } from '../types';
+import { exportTransactionsToExcel, TWELVE_HOURS_MS } from '../lib/api';
 
 interface TransactionHistoryProps {
   transactions: Transaction[];
   onDeleteTransaction: (id: string) => Promise<void>;
   isLoading: boolean;
   selectedDateFilter: 'today' | 'yesterday' | 'week' | 'month' | 'all';
+  shopName: string;
   onViewReceipt?: (url: string) => void;
 }
 
@@ -15,12 +17,15 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
   onDeleteTransaction,
   isLoading,
   selectedDateFilter,
+  shopName,
   onViewReceipt,
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'sale' | 'expense'>('all');
   const [filterPayment, setFilterPayment] = useState<'all' | PaymentMethod>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const filteredList = React.useMemo(() => {
     const now = new Date();
@@ -65,40 +70,29 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
     });
   }, [transactions, selectedDateFilter, filterType, filterPayment, searchTerm]);
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this transaction entry?')) {
-      setDeletingId(id);
-      try {
-        await onDeleteTransaction(id);
-      } finally {
-        setDeletingId(null);
-      }
+  // Execute deletion directly without browser window.confirm
+  const executeDelete = async (tx: Transaction) => {
+    const ageMs = Date.now() - new Date(tx.created_at).getTime();
+    if (ageMs > TWELVE_HOURS_MS) {
+      setDeleteError('This transaction is older than 12 hours and is permanently locked.');
+      setConfirmDeleteId(null);
+      return;
+    }
+
+    setDeletingId(tx.id);
+    setDeleteError(null);
+    try {
+      await onDeleteTransaction(tx.id);
+      setConfirmDeleteId(null);
+    } catch (err: any) {
+      setDeleteError(err.message || 'Could not delete entry.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
-  const exportToCSV = () => {
-    if (filteredList.length === 0) return;
-    const headers = ['Timestamp', 'Type', 'Category', 'Description', 'Amount', 'Payment Method', 'Customer Name', 'Phone', 'Receipt URL'];
-    const rows = filteredList.map((tx) => [
-      new Date(tx.created_at).toLocaleString('en-US'),
-      tx.type.toUpperCase(),
-      `"${tx.category.replace(/"/g, '""')}"`,
-      `"${(tx.description || '').replace(/"/g, '""')}"`,
-      tx.amount,
-      tx.payment_method.toUpperCase(),
-      `"${(tx.customer_name || '').replace(/"/g, '""')}"`,
-      `"${tx.customer_phone || ''}"`,
-      `"${tx.receipt_url || ''}"`,
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Online_Sheba_Ledger_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportXLSX = () => {
+    exportTransactionsToExcel(filteredList, shopName);
   };
 
   const formatTime = (isoString: string) => {
@@ -138,14 +132,20 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
       {/* Header Bar */}
       <div className="p-4 sm:p-5 border-b border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-bold text-zinc-900 tracking-tight flex items-center gap-2">
-            <span>Transaction Ledger</span>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold text-zinc-900 tracking-tight">
+              Transaction Ledger
+            </h3>
             <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-800">
               {filteredList.length} Records
             </span>
-          </h3>
-          <p className="text-xs text-zinc-500 mt-0.5">
-            Real-time sales & expenses synchronized with database
+          </div>
+          <p className="text-xs text-zinc-500 mt-0.5 flex items-center gap-1.5">
+            <span>Real-time accounts for {shopName}</span>
+            <span className="text-zinc-300">•</span>
+            <span className="text-amber-600 font-semibold flex items-center gap-1 text-[11px]">
+              <Clock className="w-3 h-3" /> 12h Deletion Policy Active
+            </span>
           </p>
         </div>
 
@@ -157,21 +157,31 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search transactions..."
+              placeholder="Search records..."
               className="w-full pl-8 pr-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900"
             />
           </div>
 
           <button
-            onClick={exportToCSV}
-            title="Export Ledger to CSV"
-            className="p-2 rounded-xl border border-zinc-200 text-zinc-700 hover:text-zinc-900 hover:bg-zinc-50 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+            onClick={handleExportXLSX}
+            disabled={filteredList.length === 0}
+            title="Export clean Excel (.XLSX) ledger with separate columns"
+            className="p-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs disabled:opacity-50"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="hidden sm:inline">Export</span>
+            <span className="hidden sm:inline">Export Excel</span>
           </button>
         </div>
       </div>
+
+      {deleteError && (
+        <div className="mx-4 mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center justify-between">
+          <span>{deleteError}</span>
+          <button onClick={() => setDeleteError(null)} className="text-rose-500 hover:text-rose-800">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Tabs Filter (Type & Payment Method) */}
       <div className="border-b border-zinc-100 px-4 bg-zinc-50/60 flex flex-wrap items-center justify-between gap-2 py-1.5">
@@ -245,6 +255,16 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
         ) : (
           filteredList.map((tx) => {
             const isSale = tx.type === 'sale';
+            const displayCustName = tx.customer_name?.trim() ? tx.customer_name.trim() : 'Unknown';
+
+            // 12-Hour Grace Period Check
+            const ageMs = Date.now() - new Date(tx.created_at).getTime();
+            const isDeletable = ageMs <= TWELVE_HOURS_MS;
+            const hoursRemaining = Math.max(0, Math.floor((TWELVE_HOURS_MS - ageMs) / (60 * 60 * 1000)));
+            const minsRemaining = Math.max(0, Math.floor(((TWELVE_HOURS_MS - ageMs) % (60 * 60 * 1000)) / (60 * 1000)));
+
+            const isConfirming = confirmDeleteId === tx.id;
+
             return (
               <div
                 key={tx.id}
@@ -275,6 +295,17 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                         {formatTime(tx.created_at)}
                       </span>
                       {renderPaymentBadge(tx.payment_method)}
+
+                      {/* Locked or Deletable Status Badge */}
+                      {!isDeletable ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 border border-zinc-200">
+                          <Lock className="w-2.5 h-2.5" /> Permanent
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200" title={`Can be deleted for next ${hoursRemaining}h ${minsRemaining}m`}>
+                          <Clock className="w-2.5 h-2.5" /> {hoursRemaining}h {minsRemaining}m left
+                        </span>
+                      )}
                     </div>
 
                     {tx.description && tx.description !== tx.category && (
@@ -283,16 +314,14 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                       </p>
                     )}
 
-                    {tx.customer_name && (
-                      <p className="text-[11px] text-zinc-500 truncate mt-0.5 font-medium">
-                        Client: <span className="text-zinc-800 font-semibold">{tx.customer_name}</span>
-                        {tx.customer_phone ? ` (${tx.customer_phone})` : ''}
-                      </p>
-                    )}
+                    <p className="text-[11px] text-zinc-500 truncate mt-0.5 font-medium">
+                      Customer: <span className="text-zinc-800 font-semibold">{displayCustName}</span>
+                      {tx.customer_phone ? ` (${tx.customer_phone})` : ''}
+                    </p>
                   </div>
                 </div>
 
-                {/* Right: Amount, Memo & Delete */}
+                {/* Right: Amount, Memo & Interactive Delete Confirmation */}
                 <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                   <div className="text-right">
                     <div
@@ -318,16 +347,48 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                     </button>
                   )}
 
-                  {/* Delete Button */}
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(tx.id)}
-                    disabled={deletingId === tx.id}
-                    title="Delete Entry"
-                    className="p-1.5 rounded-lg text-zinc-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-70 group-hover:opacity-100"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {/* Delete Button (Allowed within 12h, Locked after 12h) - 100% Guaranteed Inline Confirmation */}
+                  {isDeletable ? (
+                    isConfirming ? (
+                      <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 p-1 rounded-xl animate-in fade-in">
+                        <button
+                          type="button"
+                          onClick={() => executeDelete(tx)}
+                          disabled={deletingId === tx.id}
+                          className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold shadow-xs transition-colors"
+                        >
+                          {deletingId === tx.id ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200 transition-colors"
+                          title="Cancel"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setConfirmDeleteId(tx.id);
+                        }}
+                        title={`Delete entry (${hoursRemaining}h ${minsRemaining}m remaining to delete)`}
+                        className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )
+                  ) : (
+                    <span
+                      title="Cannot delete: Permanently locked after 12 hours"
+                      className="p-1.5 rounded-lg text-zinc-300 cursor-not-allowed"
+                    >
+                      <Lock className="w-4 h-4" />
+                    </span>
+                  )}
                 </div>
               </div>
             );
