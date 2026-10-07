@@ -1,6 +1,6 @@
 /**
  * Online Sheba - Daily Sales, Expense and Accounts Management
- * Professional Full-Stack Web App with Backend Server & Supabase Integration
+ * Minimalist, Modern, Full-Stack Accounts Management Web App
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -11,10 +11,8 @@ import { ExpenseTracker } from './components/ExpenseTracker';
 import { TransactionHistory } from './components/TransactionHistory';
 import { CategoryModal } from './components/CategoryModal';
 import { ReceiptModal } from './components/ReceiptModal';
-import { SupabaseSettingsModal } from './components/SupabaseSettingsModal';
 import { ReceiptViewerModal } from './components/ReceiptViewerModal';
 import {
-  getBackendStatus,
   fetchCategories,
   fetchTransactions,
   addCategory,
@@ -22,34 +20,30 @@ import {
   addTransaction,
   deleteTransaction,
 } from './lib/api';
-import { BackendStatus, Category, Transaction } from './types';
+import { Category, Transaction } from './types';
 
 export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedDateFilter, setSelectedDateFilter] = useState<
     'today' | 'yesterday' | 'week' | 'month' | 'all'
   >('today');
 
-  // Modal Dialogs
+  // Modals
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState<boolean>(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [viewingReceiptUrl, setViewingReceiptUrl] = useState<string | null>(null);
 
-  // Fetch all data from backend API
+  // Load data from backend
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [statusRes, catRes, txRes] = await Promise.all([
-        getBackendStatus().catch(() => null),
+      const [catRes, txRes] = await Promise.all([
         fetchCategories(),
         fetchTransactions(),
       ]);
 
-      setBackendStatus(statusRes);
       setCategories(catRes.categories || []);
       setTransactions(txRes.transactions || []);
     } catch (err) {
@@ -100,17 +94,15 @@ export default function App() {
     <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans text-zinc-900 selection:bg-indigo-100">
       {/* 1. Header */}
       <Header
-        backendStatus={backendStatus}
         isLoading={isLoading}
         onRefresh={loadData}
         onOpenCategories={() => setIsCategoryModalOpen(true)}
-        onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenReceiptModal={() => setIsReceiptModalOpen(true)}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* 2. Financial Dashboard (with Cash, bKash, Nagad Breakdown & Dynamic Green/Red Profit Card) */}
+        {/* 2. Financial Dashboard (Cash, bKash, Nagad Breakdown & Dynamic Green/Red Profit Card) */}
         <FinancialDashboard
           transactions={transactions}
           selectedDateFilter={selectedDateFilter}
@@ -150,7 +142,7 @@ export default function App() {
       <footer className="border-t border-zinc-200 bg-white py-4 text-xs text-zinc-500 no-print mt-auto">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left">
           <p className="font-medium">
-            © {new Date().getFullYear()} <span className="font-bold text-zinc-800">Online Sheba</span> — Accounts Management
+            © {new Date().getFullYear()} <span className="font-bold text-zinc-800">Online Sheba</span> — Daily Accounts Management
           </p>
           <div className="flex items-center gap-2 text-zinc-400">
             <span className="font-semibold text-emerald-700">Cash</span>
@@ -158,13 +150,6 @@ export default function App() {
             <span className="font-semibold text-[#e2136e]">bKash</span>
             <span>•</span>
             <span className="font-semibold text-[#ea580c]">Nagad</span>
-            <span>•</span>
-            <button
-              onClick={() => setIsSettingsModalOpen(true)}
-              className="text-zinc-600 hover:text-zinc-900 underline font-semibold"
-            >
-              Database Setup
-            </button>
           </div>
         </div>
       </footer>
@@ -184,14 +169,7 @@ export default function App() {
         onClose={() => setIsReceiptModalOpen(false)}
         categories={categories}
         onSaveReceiptTransaction={handleSaveReceiptTransaction}
-        isRemote={Boolean(backendStatus?.isSupabaseConnected)}
-      />
-
-      <SupabaseSettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        onConfigSaved={() => loadData()}
-        isRemote={Boolean(backendStatus?.isSupabaseConnected)}
+        isRemote={true}
       />
 
       <ReceiptViewerModal

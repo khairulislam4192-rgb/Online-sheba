@@ -14,9 +14,14 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
-// Middleware for parsing JSON with ample limit for image uploads
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// Backend-Only Supabase Credentials loaded securely from process.env (.env file)
+const SUPABASE_PROJECT_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_KEY || '';
+const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_ANON_KEY || '';
+
+// Middleware for parsing JSON with generous limit for image uploads
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Ensure data and uploads directories exist
 const dataDir = path.join(__dirname, 'data');
@@ -43,10 +48,6 @@ interface LocalDB {
     receipt_url?: string;
     created_at: string;
   }>;
-  settings: {
-    supabaseUrl: string;
-    supabaseAnonKey: string;
-  };
 }
 
 const defaultCategories = [
@@ -106,10 +107,6 @@ function readDB(): LocalDB {
             created_at: new Date().toISOString(),
           },
         ],
-        settings: {
-          supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
-          supabaseAnonKey: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '',
-        },
       };
       fs.writeFileSync(dbFilePath, JSON.stringify(initial, null, 2), 'utf-8');
       return initial;
@@ -121,7 +118,6 @@ function readDB(): LocalDB {
     return {
       categories: defaultCategories,
       transactions: [],
-      settings: { supabaseUrl: '', supabaseAnonKey: '' },
     };
   }
 }
@@ -134,27 +130,31 @@ function writeDB(data: LocalDB) {
   }
 }
 
-// Supabase client instance
-function getSupabase(): SupabaseClient | null {
-  const db = readDB();
-  const url = db.settings.supabaseUrl || process.env.SUPABASE_URL || '';
-  const key = db.settings.supabaseAnonKey || process.env.SUPABASE_ANON_KEY || '';
+// Server-side Supabase client singleton
+let supabaseClient: SupabaseClient | null = null;
 
-  if (!url || !key || url === 'YOUR_SUPABASE_URL') {
-    return null;
-  }
+function getSupabase(): SupabaseClient | null {
+  if (supabaseClient) return supabaseClient;
+
+  // Prefer secret key for backend administrative access, or fallback to publishable
+  const keyToUse = SUPABASE_SECRET_KEY || SUPABASE_PUBLISHABLE_KEY;
+  if (!SUPABASE_PROJECT_URL || !keyToUse) return null;
+
   try {
-    return createClient(url, key, { auth: { persistSession: false } });
-  } catch {
+    supabaseClient = createClient(SUPABASE_PROJECT_URL, keyToUse, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    return supabaseClient;
+  } catch (err) {
+    console.error('Failed to initialize server-side Supabase client:', err);
     return null;
   }
 }
 
-// ---------------- API ENDPOINTS ----------------
+// ---------------- BACKEND API ENDPOINTS ----------------
 
-// 1. Backend Status
+// Status endpoint without leaking any credentials
 app.get('/api/status', async (req: Request, res: Response) => {
-  const db = readDB();
   const sb = getSupabase();
   let isConnected = false;
 
@@ -169,23 +169,31 @@ app.get('/api/status', async (req: Request, res: Response) => {
     }
   }
 
+  const db = readDB();
   res.json({
-    isSupabaseConnected: isConnected,
-    storageProvider: isConnected ? 'supabase' : 'server',
-    supabaseUrl: db.settings.supabaseUrl ? db.settings.supabaseUrl.replace(/^(https:\/\/[^.]+).*/, '$1.supabase.co') : '',
+    isReady: true,
     categoriesCount: db.categories.length,
     transactionsCount: db.transactions.length,
+    isCloudSynced: isConnected,
   });
 });
 
-// 2. Categories
+// Categories
 app.get('/api/categories', async (req: Request, res: Response) => {
   const sb = getSupabase();
   if (sb) {
     try {
-      const { data, error } = await sb.from('categories').select('*').order('created_at', { ascending: true });
+      const { data, error } = await sb
+        .from('categories')
+        .select('*')
+        .order('created_at', { ascending: true });
+
       if (!error && data && data.length > 0) {
-        return res.json({ categories: data, source: 'supabase' });
+        // Keep local copy synced
+        const db = readDB();
+        db.categories = data;
+        writeDB(db);
+        return res.json({ categories: data, source: 'cloud' });
       }
     } catch (e) {
       console.warn('Supabase categories fetch error:', e);
@@ -193,7 +201,7 @@ app.get('/api/categories', async (req: Request, res: Response) => {
   }
 
   const db = readDB();
-  res.json({ categories: db.categories, source: 'server' });
+  res.json({ categories: db.categories, source: 'backend' });
 });
 
 app.post('/api/categories', async (req: Request, res: Response) => {
@@ -214,7 +222,12 @@ app.post('/api/categories', async (req: Request, res: Response) => {
 
   if (sb) {
     try {
-      const { data, error } = await sb.from('categories').insert([{ name: trimmed }]).select().single();
+      const { data, error } = await sb
+        .from('categories')
+        .insert([{ name: trimmed }])
+        .select()
+        .single();
+
       if (!error && data) {
         createdCategory = data;
       }
@@ -249,14 +262,21 @@ app.delete('/api/categories/:id', async (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-// 3. Transactions
+// Transactions
 app.get('/api/transactions', async (req: Request, res: Response) => {
   const sb = getSupabase();
   if (sb) {
     try {
-      const { data, error } = await sb.from('transactions').select('*').order('created_at', { ascending: false });
-      if (!error && data) {
-        return res.json({ transactions: data, source: 'supabase' });
+      const { data, error } = await sb
+        .from('transactions')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const db = readDB();
+        db.transactions = data;
+        writeDB(db);
+        return res.json({ transactions: data, source: 'cloud' });
       }
     } catch (e) {
       console.warn('Supabase transactions fetch error:', e);
@@ -264,17 +284,28 @@ app.get('/api/transactions', async (req: Request, res: Response) => {
   }
 
   const db = readDB();
-  res.json({ transactions: db.transactions, source: 'server' });
+  res.json({ transactions: db.transactions, source: 'backend' });
 });
 
 app.post('/api/transactions', async (req: Request, res: Response) => {
-  const { type, category, description, amount, payment_method, customer_name, customer_phone, receipt_url } = req.body;
+  const {
+    type,
+    category,
+    description,
+    amount,
+    payment_method,
+    customer_name,
+    customer_phone,
+    receipt_url,
+  } = req.body;
 
   if (!type || !category || typeof amount !== 'number' || !payment_method) {
     return res.status(400).json({ error: 'Missing required transaction fields' });
   }
 
-  const validPayment = ['cash', 'bkash', 'nagad'].includes(payment_method) ? payment_method : 'cash';
+  const validPayment = ['cash', 'bkash', 'nagad'].includes(payment_method)
+    ? payment_method
+    : 'cash';
   const now = new Date().toISOString();
 
   let newTx = {
@@ -345,7 +376,7 @@ app.delete('/api/transactions/:id', async (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-// 4. Receipt Storage Upload
+// Digital Receipt Upload (Stored to Supabase Storage or Server Statically)
 app.post('/api/receipts/upload', async (req: Request, res: Response) => {
   try {
     const { imageData, fileName } = req.body;
@@ -356,7 +387,6 @@ app.post('/api/receipts/upload', async (req: Request, res: Response) => {
     const cleanName = (fileName || `receipt_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
     const finalFileName = `${cleanName}.png`;
 
-    // Extract base64 buffer
     const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
 
@@ -371,16 +401,16 @@ app.post('/api/receipts/upload', async (req: Request, res: Response) => {
 
         if (!uploadError) {
           const { data } = sb.storage.from('receipts').getPublicUrl(filePath);
-          return res.json({ url: data.publicUrl, provider: 'supabase' });
+          return res.json({ url: data.publicUrl, provider: 'cloud' });
         } else {
-          console.warn('Supabase storage upload error, saving locally:', uploadError.message);
+          console.warn('Supabase storage upload error:', uploadError.message);
         }
       } catch (err) {
-        console.warn('Supabase storage exception, saving locally:', err);
+        console.warn('Supabase storage exception:', err);
       }
     }
 
-    // Save locally on server
+    // Save on server statically
     const localFilePath = path.join(uploadsDir, finalFileName);
     fs.writeFileSync(localFilePath, buffer);
 
@@ -392,45 +422,7 @@ app.post('/api/receipts/upload', async (req: Request, res: Response) => {
   }
 });
 
-// 5. Settings Configuration
-app.get('/api/settings', (req: Request, res: Response) => {
-  const db = readDB();
-  res.json({
-    supabaseUrl: db.settings.supabaseUrl || '',
-    hasKey: Boolean(db.settings.supabaseAnonKey),
-  });
-});
-
-app.post('/api/settings', async (req: Request, res: Response) => {
-  const { supabaseUrl, supabaseAnonKey } = req.body;
-  const db = readDB();
-
-  db.settings.supabaseUrl = (supabaseUrl || '').trim();
-  db.settings.supabaseAnonKey = (supabaseAnonKey || '').trim();
-  writeDB(db);
-
-  // Test connection
-  let testSuccess = false;
-  let message = 'Saved to server configuration.';
-  if (db.settings.supabaseUrl && db.settings.supabaseAnonKey) {
-    try {
-      const testSb = createClient(db.settings.supabaseUrl, db.settings.supabaseAnonKey);
-      const { error } = await testSb.from('categories').select('id').limit(1);
-      if (!error || error.code === '42P01') {
-        testSuccess = true;
-        message = 'Supabase successfully connected!';
-      } else {
-        message = `Connected with warning: ${error.message}`;
-      }
-    } catch (e: any) {
-      message = `Connection test warning: ${e.message}`;
-    }
-  }
-
-  res.json({ success: true, testSuccess, message });
-});
-
-// ---------------- VITE MIDDLEWARE / STATIC FILES ----------------
+// ---------------- VITE MIDDLEWARE / PRODUCTION SERVE ----------------
 
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
