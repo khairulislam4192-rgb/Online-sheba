@@ -229,22 +229,23 @@ app.post('/api/categories', async (req: Request, res: Response) => {
         .single();
 
       if (error) {
-        console.error('Supabase insert category error:', error);
+        console.warn('Supabase insert category warning/error:', error.message);
         if (error.code === '23505') {
-          return res.status(400).json({ error: 'A category with this name already exists in Supabase.' });
+          return res.status(400).json({ error: 'A category with this name already exists.' });
         }
-        if (error.code === '42501' || error.message?.includes('row-level security') || error.message?.includes('violates')) {
-          return res.status(403).json({ error: `Supabase RLS Permission Error: ${error.message}. Please run the RLS fix SQL.` });
+        // If table doesn't exist yet (PGRST205) or RLS error (42501), fallback gracefully to server DB
+        if (error.code === 'PGRST205' || error.code === '42501' || error.message?.includes('schema cache') || error.message?.includes('row-level security')) {
+          console.log('Falling back to backend storage while Supabase schema/RLS is being set up.');
+        } else {
+          console.warn('Supabase returned error, saving locally:', error.message);
         }
-        return res.status(400).json({ error: error.message || 'Failed to insert category into Supabase' });
       }
 
       if (data) {
         createdCategory = data;
       }
     } catch (e: any) {
-      console.error('Supabase insert category exception:', e);
-      return res.status(500).json({ error: e.message || 'Server error while adding category' });
+      console.warn('Supabase insert category exception, saving locally:', e.message);
     }
   }
 
@@ -355,19 +356,19 @@ app.post('/api/transactions', async (req: Request, res: Response) => {
         .single();
 
       if (error) {
-        console.error('Supabase insert transaction error:', error);
-        if (error.code === '42501' || error.message?.includes('row-level security') || error.message?.includes('violates')) {
-          return res.status(403).json({ error: `Supabase RLS Permission Error: ${error.message}. Please run the RLS fix SQL.` });
+        console.warn('Supabase insert transaction warning/error:', error.message);
+        if (error.code === 'PGRST205' || error.code === '42501' || error.message?.includes('schema cache') || error.message?.includes('row-level security')) {
+          console.log('Falling back to backend storage while Supabase schema/RLS is being set up.');
+        } else {
+          console.warn('Supabase returned error, saving transaction locally:', error.message);
         }
-        return res.status(400).json({ error: error.message || 'Failed to insert transaction into Supabase' });
       }
 
       if (data) {
         newTx = data;
       }
     } catch (e: any) {
-      console.error('Supabase transaction exception:', e);
-      return res.status(500).json({ error: e.message || 'Server error while saving transaction' });
+      console.warn('Supabase transaction exception, saving locally:', e.message);
     }
   }
 
