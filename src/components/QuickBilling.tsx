@@ -19,6 +19,7 @@ export const QuickBilling: React.FC<QuickBillingProps> = ({
   const [description, setDescription] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [showSuccessBadge, setShowSuccessBadge] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (categories.length > 0 && !selectedCategory) {
@@ -39,21 +40,26 @@ export const QuickBilling: React.FC<QuickBillingProps> = ({
     if (!numAmount || numAmount <= 0) return;
 
     const catName = selectedCategory || (categories[0]?.name ?? 'General Sale');
+    setErrorMessage(null);
 
-    await onAddSale({
-      type: 'sale',
-      category: catName,
-      description: description.trim() || catName,
-      amount: numAmount,
-      payment_method: paymentMethod,
-      customer_name: customerName.trim() || undefined,
-    });
+    try {
+      await onAddSale({
+        type: 'sale',
+        category: catName,
+        description: description.trim() || catName,
+        amount: numAmount,
+        payment_method: paymentMethod,
+        customer_name: customerName.trim() || undefined,
+      });
 
-    setAmount('');
-    setDescription('');
-    setCustomerName('');
-    setShowSuccessBadge(true);
-    setTimeout(() => setShowSuccessBadge(false), 2000);
+      setAmount('');
+      setDescription('');
+      setCustomerName('');
+      setShowSuccessBadge(true);
+      setTimeout(() => setShowSuccessBadge(false), 2000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to record sale');
+    }
   };
 
   return (
@@ -78,6 +84,12 @@ export const QuickBilling: React.FC<QuickBillingProps> = ({
           </span>
         )}
       </div>
+
+      {errorMessage && (
+        <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+          {errorMessage}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Dynamic Category Chips */}

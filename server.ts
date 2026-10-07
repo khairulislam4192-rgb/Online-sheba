@@ -228,11 +228,23 @@ app.post('/api/categories', async (req: Request, res: Response) => {
         .select()
         .single();
 
-      if (!error && data) {
+      if (error) {
+        console.error('Supabase insert category error:', error);
+        if (error.code === '23505') {
+          return res.status(400).json({ error: 'A category with this name already exists in Supabase.' });
+        }
+        if (error.code === '42501' || error.message?.includes('row-level security') || error.message?.includes('violates')) {
+          return res.status(403).json({ error: `Supabase RLS Permission Error: ${error.message}. Please run the RLS fix SQL.` });
+        }
+        return res.status(400).json({ error: error.message || 'Failed to insert category into Supabase' });
+      }
+
+      if (data) {
         createdCategory = data;
       }
-    } catch (e) {
-      console.warn('Supabase insert category error:', e);
+    } catch (e: any) {
+      console.error('Supabase insert category exception:', e);
+      return res.status(500).json({ error: e.message || 'Server error while adding category' });
     }
   }
 
@@ -342,11 +354,20 @@ app.post('/api/transactions', async (req: Request, res: Response) => {
         .select()
         .single();
 
-      if (!error && data) {
+      if (error) {
+        console.error('Supabase insert transaction error:', error);
+        if (error.code === '42501' || error.message?.includes('row-level security') || error.message?.includes('violates')) {
+          return res.status(403).json({ error: `Supabase RLS Permission Error: ${error.message}. Please run the RLS fix SQL.` });
+        }
+        return res.status(400).json({ error: error.message || 'Failed to insert transaction into Supabase' });
+      }
+
+      if (data) {
         newTx = data;
       }
-    } catch (e) {
-      console.warn('Supabase insert transaction error:', e);
+    } catch (e: any) {
+      console.error('Supabase transaction exception:', e);
+      return res.status(500).json({ error: e.message || 'Server error while saving transaction' });
     }
   }
 

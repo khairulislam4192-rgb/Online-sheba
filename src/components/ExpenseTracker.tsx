@@ -16,6 +16,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   const [amount, setAmount] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [showSuccessBadge, setShowSuccessBadge] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const commonExpenseCategories = [
     'Paper & Stationery',
@@ -32,19 +33,24 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
     e.preventDefault();
     const numAmount = parseFloat(amount);
     if (!numAmount || numAmount <= 0) return;
+    setErrorMessage(null);
 
-    await onAddExpense({
-      type: 'expense',
-      category: category,
-      description: description.trim() || category,
-      amount: numAmount,
-      payment_method: paymentMethod,
-    });
+    try {
+      await onAddExpense({
+        type: 'expense',
+        category: category,
+        description: description.trim() || category,
+        amount: numAmount,
+        payment_method: paymentMethod,
+      });
 
-    setAmount('');
-    setDescription('');
-    setShowSuccessBadge(true);
-    setTimeout(() => setShowSuccessBadge(false), 2000);
+      setAmount('');
+      setDescription('');
+      setShowSuccessBadge(true);
+      setTimeout(() => setShowSuccessBadge(false), 2000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to record expense');
+    }
   };
 
   return (
@@ -69,6 +75,12 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
           </span>
         )}
       </div>
+
+      {errorMessage && (
+        <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+          {errorMessage}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Category Dropdown */}
