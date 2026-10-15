@@ -1,22 +1,30 @@
 import React from 'react';
-import { FolderTree, Receipt, RefreshCw, LogOut, User, Store } from 'lucide-react';
-import { UserProfile } from '../types';
+import { FolderTree, Receipt, RefreshCw, LogOut, Database, Smartphone, Store } from 'lucide-react';
+import { UserProfile, AppTab } from '../types';
 
 interface HeaderProps {
   currentUser: UserProfile | null;
   isLoading: boolean;
+  activeTab: AppTab;
+  onTabChange: (tab: AppTab) => void;
+  agentCount?: number;
   onRefresh: () => void;
   onOpenCategories: () => void;
   onOpenReceiptModal: () => void;
+  onOpenBackupSync: () => void;
   onSignOut: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   currentUser,
   isLoading,
+  activeTab,
+  onTabChange,
+  agentCount = 0,
   onRefresh,
   onOpenCategories,
   onOpenReceiptModal,
+  onOpenBackupSync,
   onSignOut,
 }) => {
   const todayFormatted = new Intl.DateTimeFormat('en-US', {
@@ -54,6 +62,38 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
+          {/* Center: Quick Section Switcher in Header (Desktop) */}
+          <div className="hidden md:flex items-center gap-1.5 bg-zinc-100 p-1 rounded-2xl border border-zinc-200">
+            <button
+              onClick={() => onTabChange('shop')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'shop'
+                  ? 'bg-white text-zinc-900 shadow-xs border border-zinc-200/80'
+                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50'
+              }`}
+            >
+              <Store className="w-3.5 h-3.5 text-indigo-600" />
+              <span>দোকান ও সাধারণ হিসাব</span>
+            </button>
+
+            <button
+              onClick={() => onTabChange('agent')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'agent'
+                  ? 'bg-zinc-900 text-white shadow-xs'
+                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50'
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5 text-pink-400" />
+              <span>বিকাশ ও নগদ এজেন্ট</span>
+              {agentCount > 0 && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-pink-500 text-white font-mono font-bold">
+                  {agentCount}
+                </span>
+              )}
+            </button>
+          </div>
+
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
             {/* Refresh Data */}
@@ -64,6 +104,17 @@ export const Header: React.FC<HeaderProps> = ({
               className="p-2 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl border border-zinc-200 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+
+            {/* Cloud Auto-Backup & Sync */}
+            <button
+              onClick={onOpenBackupSync}
+              className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700 hover:text-zinc-900 bg-white hover:bg-zinc-50 border border-zinc-200 px-3 py-2 rounded-xl transition-colors shadow-2xs"
+              title="Cloud Auto-Backup & Supabase Sync"
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Auto Backup</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             </button>
 
             {/* Categories Management */}

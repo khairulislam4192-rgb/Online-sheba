@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { X, Printer, Download, CloudUpload, Check, Copy, AlertCircle, Plus, Trash2, Banknote, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
+import { X, Printer, Download, CloudUpload, Check, Copy, AlertCircle, Plus, Trash2, Banknote, FileText } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import { Category, PaymentMethod, Transaction, PaperSize } from '../types';
 import { uploadReceipt } from '../lib/api';
 
@@ -38,6 +39,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   ]);
 
   const [isUploading, setIsUploading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -75,83 +78,202 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     }
   };
 
-  const captureCanvas = async (): Promise<HTMLCanvasElement | null> => {
+  // High-fidelity image capture using toPng (with html2canvas fallback)
+  const captureReceiptImage = async (): Promise<string | null> => {
     if (!receiptRef.current) return null;
-    return await html2canvas(receiptRef.current, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff',
-    });
+    const el = receiptRef.current;
+
+    try {
+      // Modern SVG foreignObject capture - preserves crisp CSS grid, flex, colors, borders
+      const dataUrl = await toPng(el, {
+        pixelRatio: 2,
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        skipFonts: true,
+      });
+      return dataUrl;
+    } catch (err) {
+      console.warn('toPng failed, falling back to html2canvas:', err);
+      try {
+        const canvas = await html2canvas(el, {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+        });
+        return canvas.toDataURL('image/png');
+      } catch (canvasErr) {
+        console.error('All capture methods failed:', canvasErr);
+        return null;
+      }
+    }
   };
 
   const handleDownloadImage = async () => {
     try {
-      const canvas = await captureCanvas();
-      if (!canvas) return;
-      const dataUrl = canvas.toDataURL('image/png');
+      setIsDownloading(true);
+      const dataUrl = await captureReceiptImage();
+      if (!dataUrl) {
+        throw new Error('Unable to render memo image.');
+      }
       const link = document.createElement('a');
-      link.download = `${shopName.replace(/\s+/g, '_')}_Memo_${receiptNumber}.png`;
+      const cleanShopName = (shopName || 'Online_Sheba').replace(/\s+/g, '_');
+      link.download = `${cleanShopName}_Cash_Memo_${receiptNumber}.png`;
       link.href = dataUrl;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
     } catch (err: any) {
-      alert('Could not download image: ' + err.message);
+      alert('Could not download memo image: ' + (err.message || 'Error occurred'));
+    } finally {
+      setIsDownloading(false);
     }
   };
 
-  const handlePrint = () => {
-    if (!receiptRef.current) return;
-    const content = receiptRef.current.innerHTML;
-    const printWindow = window.open('', '_blank', 'width=850,height=950');
-    if (!printWindow) {
+  // Foolproof print engine matching preview 100% for A4 or 88mm Thermal POS
+  const triggerPrintHtml = (printContentHtml: string) => {
+    // 1. Remove old print iframes
+    const oldIframes = document.querySelectorAll('.receipt-print-iframe');
+    oldIframes.forEach((el) => el.remove());
+
+    // 2. Create isolated hidden iframe
+    const iframe = document.createElement('iframe');
+    iframe.className = 'receipt-print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (!doc) {
       window.print();
       return;
     }
 
     const isThermal = paperSize === 'thermal';
+    const pageStyles = isThermal
+      ? `@page { size: 80mm auto; margin: 2mm; }
+         body { width: 78mm; margin: 0 auto; padding: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }`
+      : `@page { size: A4 portrait; margin: 8mm; }
+         body { width: 100%; max-width: 680px; margin: 0 auto; padding: 12px; font-family: 'Geist', 'Hind Siliguri', sans-serif; font-size: 12px; }`;
 
+    doc.open();
+    doc.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>${shopName || 'Online Sheba'} - Cash Memo ${receiptNumber}</title>
+          <link rel="preconnect" href="https://fonts.googleapis.com">
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+          <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700;800;900&family=Hind+Siliguri:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+          <style>
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+              color-adjust: exact !important;
+            }
+            html {
+              background: #ffffff;
+              color: #111827;
+            }
+            ${pageStyles}
+            table {
+              border-collapse: collapse;
+              width: 100%;
+            }
+          </style>
+        </head>
+        <body>
+          ${printContentHtml}
+        </body>
+      </html>
+    `);
+    doc.close();
+
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (err) {
+        console.warn('iframe print was blocked, falling back to new window print:', err);
+        handlePrintInNewWindow();
+      } finally {
+        setTimeout(() => {
+          iframe.remove();
+        }, 5000);
+      }
+    }, 400);
+  };
+
+  const handlePrint = () => {
+    if (!receiptRef.current) return;
+    setIsPrinting(true);
+    try {
+      const html = receiptRef.current.outerHTML;
+      triggerPrintHtml(html);
+    } catch (e) {
+      console.error('Print failed:', e);
+      handlePrintInNewWindow();
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handlePrintInNewWindow = () => {
+    if (!receiptRef.current) return;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Pop-up was blocked. Please allow popups for this site to open print window.');
+      return;
+    }
+    const isThermal = paperSize === 'thermal';
+    const html = receiptRef.current.outerHTML;
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Cash Memo - ${receiptNumber}</title>
+          <meta charset="utf-8" />
+          <title>${shopName || 'Online Sheba'} - Cash Memo ${receiptNumber}</title>
+          <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700;800;900&family=Hind+Siliguri:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
           <style>
-            @page {
-              size: ${isThermal ? '80mm auto' : 'A4 portrait'};
-              margin: ${isThermal ? '3mm' : '15mm'};
-            }
-            body {
-              font-family: ${
-                isThermal
-                  ? "'JetBrains Mono', 'Courier New', Courier, monospace"
-                  : "'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-              };
-              color: #111;
-              background: #fff;
-              margin: 0;
-              padding: ${isThermal ? '2px' : '10px'};
-              font-size: ${isThermal ? '11px' : '13px'};
+            * {
+              box-sizing: border-box;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
+              color-adjust: exact !important;
             }
-            * { box-sizing: border-box; }
-            table { width: 100%; border-collapse: collapse; }
-            th, td { padding: ${isThermal ? '4px 2px' : '8px 6px'}; }
-            .border-grid th, .border-grid td { border: 1px solid #d1d5db; }
-            .dashed-line { border-bottom: 1px dashed #4b5563; margin: 8px 0; }
-            .text-center { text-align: center; }
-            .text-right { text-align: right; }
-            .font-bold { font-weight: bold; }
-            .badge-paid { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 9999px; font-weight: bold; border: 1px solid #86efac; }
-            .badge-due { background: #ffe4e6; color: #9f1239; padding: 2px 8px; border-radius: 9999px; font-weight: bold; border: 1px solid #fda4af; }
+            body {
+              margin: 0;
+              padding: ${isThermal ? '6px' : '20px'};
+              background: #ffffff;
+              color: #111827;
+              display: flex;
+              justify-content: center;
+              font-family: ${isThermal ? "'JetBrains Mono', monospace" : "'Geist', 'Hind Siliguri', sans-serif"};
+            }
+            .wrapper {
+              width: ${isThermal ? '78mm' : '100%'};
+              max-width: ${isThermal ? '78mm' : '680px'};
+            }
+            @page {
+              size: ${isThermal ? '80mm auto' : 'A4 portrait'};
+              margin: ${isThermal ? '2mm' : '8mm'};
+            }
           </style>
         </head>
         <body>
-          ${content}
+          <div class="wrapper">
+            ${html}
+          </div>
           <script>
             window.onload = function() {
+              window.focus();
               window.print();
-              setTimeout(function() { window.close(); }, 600);
             };
           </script>
         </body>
@@ -168,9 +290,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       let receiptUrl: string | undefined = undefined;
 
       try {
-        const canvas = await captureCanvas();
-        if (canvas) {
-          const dataUrl = canvas.toDataURL('image/png');
+        const dataUrl = await captureReceiptImage();
+        if (dataUrl) {
           const uploadRes = await uploadReceipt(dataUrl, `receipt_${receiptNumber}`);
           receiptUrl = uploadRes.url;
           setUploadedUrl(uploadRes.url);
@@ -466,67 +587,120 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
           {/* Right Preview (A4 or 88mm Thermal) */}
           <div className="lg:col-span-7 flex flex-col items-center justify-between bg-zinc-100/70 p-4 sm:p-5 rounded-2xl border border-zinc-200 overflow-x-auto">
-            {/* The Actual Renderable Element */}
+            {/* The Actual Renderable Element with Pure Hex Colors & Explicit Inline Styles */}
             <div
               id="printable-receipt"
               ref={receiptRef}
+              style={{
+                backgroundColor: '#ffffff',
+                color: '#111827',
+              }}
               className={`bg-white rounded-xl shadow-md text-zinc-950 transition-all ${
                 paperSize === 'thermal'
                   ? 'w-[320px] p-5 border border-zinc-400 font-mono text-[11px]'
-                  : 'w-full max-w-lg p-7 border border-zinc-300 font-sans text-xs'
+                  : 'w-full max-w-[620px] p-6 sm:p-7 border border-zinc-300 font-sans text-xs'
               }`}
             >
               {/* === A4 / STANDARD FORMAT === */}
               {paperSize === 'a4' ? (
                 <div className="space-y-4">
                   {/* Big Colorful Header Banner */}
-                  <div className="flex items-start justify-between pb-4 border-b-2 border-indigo-600">
+                  <div
+                    className="flex items-start justify-between pb-4 border-b-2"
+                    style={{ borderBottomColor: '#4f46e5' }}
+                  >
                     <div>
                       {/* Big Bold Shop Name */}
-                      <h2 className="text-2xl sm:text-3xl font-black text-indigo-950 tracking-tight uppercase">
+                      <h2
+                        className="text-2xl sm:text-3xl font-black tracking-tight uppercase"
+                        style={{ color: '#1e1b4b' }}
+                      >
                         {shopName}
                       </h2>
-                      <p className="text-xs font-bold text-indigo-600 mt-0.5">
+                      <p
+                        className="text-xs font-bold mt-0.5"
+                        style={{ color: '#4f46e5' }}
+                      >
                         COMPUTER & ONLINE DIGITAL SERVICE CENTER
                       </p>
-                      <p className="text-[11px] text-zinc-500 mt-1">
+                      <p
+                        className="text-[11px] mt-1"
+                        style={{ color: '#6b7280' }}
+                      >
                         Photocopy • Composition • Govt & Job Applications • Photo Print
                       </p>
                     </div>
 
                     <div className="text-right">
-                      <div className="inline-block px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-lg font-black text-xs uppercase tracking-wider">
+                      <div
+                        className="inline-block px-3 py-1 rounded-lg font-black text-xs uppercase tracking-wider"
+                        style={{
+                          backgroundColor: '#eef2ff',
+                          color: '#312e81',
+                          border: '1px solid #c7d2fe',
+                        }}
+                      >
                         CASH MEMO
                       </div>
                       <div className="mt-2 font-mono text-xs">
-                        <span className="text-zinc-400">NO: </span>
-                        <span className="font-bold text-zinc-900">{receiptNumber}</span>
+                        <span style={{ color: '#9ca3af' }}>NO: </span>
+                        <span className="font-bold" style={{ color: '#111827' }}>{receiptNumber}</span>
                       </div>
-                      <div className="font-mono text-[11px] text-zinc-500">
+                      <div className="font-mono text-[11px]" style={{ color: '#6b7280' }}>
                         {new Date().toLocaleDateString('en-GB')}
                       </div>
                     </div>
                   </div>
 
                   {/* Customer & Billing Meta Grid */}
-                  <div className="grid grid-cols-2 gap-4 p-3 rounded-xl bg-zinc-50/80 border border-zinc-200 text-xs">
+                  <div
+                    className="grid grid-cols-2 gap-4 p-3 rounded-xl text-xs"
+                    style={{
+                      backgroundColor: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                    }}
+                  >
                     <div>
-                      <span className="text-[10px] uppercase font-bold text-zinc-400 block">Billed To:</span>
-                      <span className="font-bold text-zinc-900 text-sm">{customerName || 'Walk-in Customer'}</span>
+                      <span className="text-[10px] uppercase font-bold block" style={{ color: '#9ca3af' }}>
+                        Billed To:
+                      </span>
+                      <span className="font-bold text-sm" style={{ color: '#111827' }}>
+                        {customerName || 'Walk-in Customer'}
+                      </span>
                       {customerPhone && (
-                        <span className="text-zinc-600 font-mono block text-xs mt-0.5">Phone: {customerPhone}</span>
+                        <span className="font-mono block text-xs mt-0.5" style={{ color: '#4b5563' }}>
+                          Phone: {customerPhone}
+                        </span>
                       )}
                     </div>
                     <div className="text-right">
-                      <span className="text-[10px] uppercase font-bold text-zinc-400 block">Payment Mode:</span>
-                      <span className="font-bold uppercase text-zinc-900">{paymentMethod}</span>
+                      <span className="text-[10px] uppercase font-bold block" style={{ color: '#9ca3af' }}>
+                        Payment Mode:
+                      </span>
+                      <span className="font-bold uppercase" style={{ color: '#111827' }}>
+                        {paymentMethod}
+                      </span>
                       <div className="mt-1">
                         {isFullyPaid ? (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold border border-emerald-300">
+                          <span
+                            className="inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold"
+                            style={{
+                              backgroundColor: '#dcfce7',
+                              color: '#166534',
+                              border: '1px solid #86efac',
+                            }}
+                          >
                             PAID IN FULL
                           </span>
                         ) : (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-extrabold border border-rose-300">
+                          <span
+                            className="inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold"
+                            style={{
+                              backgroundColor: '#fee2e2',
+                              color: '#991b1b',
+                              border: '1px solid #fca5a5',
+                            }}
+                          >
                             PARTIAL / DUE
                           </span>
                         )}
@@ -535,10 +709,20 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
 
                   {/* Structured Rows & Columns Product Table */}
-                  <div className="overflow-hidden rounded-xl border border-zinc-300">
-                    <table className="w-full text-left text-xs">
+                  <div
+                    className="overflow-hidden rounded-xl"
+                    style={{ border: '1px solid #d1d5db' }}
+                  >
+                    <table className="w-full text-left text-xs" style={{ borderCollapse: 'collapse' }}>
                       <thead>
-                        <tr className="bg-indigo-900 text-white font-bold text-[11px]">
+                        <tr
+                          style={{
+                            backgroundColor: '#1e1b4b',
+                            color: '#ffffff',
+                            fontWeight: 'bold',
+                            fontSize: '11px',
+                          }}
+                        >
                           <th className="py-2.5 px-3 w-10 text-center">SL</th>
                           <th className="py-2.5 px-3">Service / Item Description</th>
                           <th className="py-2.5 px-3 text-center w-14">Qty</th>
@@ -546,14 +730,26 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                           <th className="py-2.5 px-3 text-right w-24">Total (৳)</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-zinc-200 text-zinc-800">
+                      <tbody style={{ color: '#27272a' }}>
                         {items.map((it, i) => (
-                          <tr key={i} className={i % 2 === 1 ? 'bg-zinc-50/70' : 'bg-white'}>
-                            <td className="py-2 px-3 text-center font-mono text-zinc-400">{i + 1}</td>
-                            <td className="py-2 px-3 font-semibold text-zinc-900">{it.description || 'Service'}</td>
+                          <tr
+                            key={i}
+                            style={{
+                              backgroundColor: i % 2 === 1 ? '#f9fafb' : '#ffffff',
+                              borderBottom: '1px solid #e5e7eb',
+                            }}
+                          >
+                            <td className="py-2 px-3 text-center font-mono" style={{ color: '#9ca3af' }}>
+                              {i + 1}
+                            </td>
+                            <td className="py-2 px-3 font-semibold" style={{ color: '#111827' }}>
+                              {it.description || 'Service'}
+                            </td>
                             <td className="py-2 px-3 text-center font-mono">{it.quantity}</td>
                             <td className="py-2 px-3 text-right font-mono">৳{it.rate}</td>
-                            <td className="py-2 px-3 text-right font-mono font-bold text-zinc-950">৳{it.total}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold" style={{ color: '#09090b' }}>
+                              ৳{it.total}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -563,26 +759,36 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   {/* Totals Section */}
                   <div className="flex justify-end pt-2">
                     <div className="w-56 space-y-1.5 text-xs">
-                      <div className="flex justify-between text-zinc-600">
+                      <div className="flex justify-between" style={{ color: '#52525b' }}>
                         <span>Subtotal:</span>
                         <span className="font-mono font-bold">৳{subtotal}</span>
                       </div>
                       {discount > 0 && (
-                        <div className="flex justify-between text-zinc-600">
+                        <div className="flex justify-between" style={{ color: '#52525b' }}>
                           <span>Discount:</span>
-                          <span className="font-mono text-emerald-600 font-bold">-৳{discount}</span>
+                          <span className="font-mono font-bold" style={{ color: '#059669' }}>
+                            -৳{discount}
+                          </span>
                         </div>
                       )}
-                      <div className="flex justify-between text-indigo-950 font-black border-t-2 border-indigo-600 pt-1.5 text-sm">
+                      <div
+                        className="flex justify-between font-black pt-1.5 text-sm"
+                        style={{
+                          borderTop: '2px solid #4f46e5',
+                          color: '#1e1b4b',
+                        }}
+                      >
                         <span>Total Payable:</span>
                         <span className="font-mono">৳{grandTotal}</span>
                       </div>
-                      <div className="flex justify-between text-zinc-800 font-bold">
+                      <div className="flex justify-between font-bold" style={{ color: '#27272a' }}>
                         <span>Amount Paid ({paymentMethod.toUpperCase()}):</span>
-                        <span className="font-mono text-emerald-700">৳{paid}</span>
+                        <span className="font-mono" style={{ color: '#047857' }}>
+                          ৳{paid}
+                        </span>
                       </div>
                       {due > 0 && (
-                        <div className="flex justify-between text-rose-600 font-bold">
+                        <div className="flex justify-between font-bold" style={{ color: '#dc2626' }}>
                           <span>Due Balance:</span>
                           <span className="font-mono">৳{due}</span>
                         </div>
@@ -591,52 +797,79 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
 
                   {/* Signatures Section */}
-                  <div className="pt-10 grid grid-cols-2 gap-8 text-center text-[11px] text-zinc-600">
+                  <div className="pt-10 grid grid-cols-2 gap-8 text-center text-[11px]" style={{ color: '#4b5563' }}>
                     <div>
-                      <div className="border-b border-zinc-400 w-36 mx-auto mb-1.5"></div>
+                      <div
+                        className="w-36 mx-auto mb-1.5"
+                        style={{ borderBottom: '1px solid #9ca3af' }}
+                      ></div>
                       <span className="font-semibold">Customer Signature</span>
-                      <p className="text-[9px] text-zinc-400">(গ্রাহকের স্বাক্ষর)</p>
+                      <p className="text-[9px]" style={{ color: '#9ca3af' }}>(গ্রাহকের স্বাক্ষর)</p>
                     </div>
                     <div>
-                      <div className="border-b border-zinc-400 w-36 mx-auto mb-1.5"></div>
+                      <div
+                        className="w-36 mx-auto mb-1.5"
+                        style={{ borderBottom: '1px solid #9ca3af' }}
+                      ></div>
                       <span className="font-semibold">Authorized Signature & Seal</span>
-                      <p className="text-[9px] text-zinc-400">(কর্তৃপক্ষের স্বাক্ষর ও সিল)</p>
+                      <p className="text-[9px]" style={{ color: '#9ca3af' }}>(কর্তৃপক্ষের স্বাক্ষর ও সিল)</p>
                     </div>
                   </div>
 
                   {/* Memo Footer */}
-                  <div className="pt-4 border-t border-dashed border-zinc-200 text-center text-[10px] text-zinc-400">
+                  <div
+                    className="pt-4 text-center text-[10px]"
+                    style={{
+                      borderTop: '1px dashed #e5e7eb',
+                      color: '#9ca3af',
+                    }}
+                  >
                     Thank you for your business! Please preserve this memo for any queries.
                   </div>
                 </div>
               ) : (
                 /* === 88MM / 80MM POS THERMAL FORMAT === */
-                <div className="space-y-3 font-mono text-black text-[11px]">
+                <div
+                  className="space-y-3 font-mono text-[11px]"
+                  style={{ color: '#000000' }}
+                >
                   {/* Big Bold Shop Name */}
-                  <div className="text-center pb-2 border-b-2 border-black">
+                  <div
+                    className="text-center pb-2"
+                    style={{ borderBottom: '2px solid #000000' }}
+                  >
                     <h3 className="text-xl font-black uppercase tracking-tight text-black">
                       {shopName}
                     </h3>
                     <p className="text-[10px] font-bold mt-0.5">
                       COMPUTER & ONLINE SERVICES
                     </p>
-                    <p className="text-[9px] text-zinc-600">
+                    <p className="text-[9px]" style={{ color: '#52525b' }}>
                       Photocopy • Compose • Online Forms
                     </p>
-                    <div className="mt-1 font-bold text-[10px] border border-black inline-block px-2 py-0.2">
+                    <div
+                      className="mt-1 font-bold text-[10px] inline-block px-2 py-0.5"
+                      style={{ border: '1px solid #000000' }}
+                    >
                       CASH RECEIPT (POS)
                     </div>
                   </div>
 
                   {/* POS Details */}
-                  <div className="space-y-0.5 text-[10px] border-b border-dashed border-zinc-600 pb-2">
+                  <div
+                    className="space-y-0.5 text-[10px] pb-2"
+                    style={{ borderBottom: '1px dashed #52525b' }}
+                  >
                     <div className="flex justify-between">
                       <span>MEMO NO:</span>
                       <span className="font-bold">{receiptNumber}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>DATE:</span>
-                      <span>{new Date().toLocaleDateString('en-GB')} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span>
+                        {new Date().toLocaleDateString('en-GB')}{' '}
+                        {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span>CUSTOMER:</span>
@@ -655,19 +888,22 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
 
                   {/* POS Rows & Columns Table */}
-                  <div className="border-b border-dashed border-zinc-600 pb-2">
-                    <table className="w-full text-left text-[10px]">
+                  <div
+                    className="pb-2"
+                    style={{ borderBottom: '1px dashed #52525b' }}
+                  >
+                    <table className="w-full text-left text-[10px]" style={{ borderCollapse: 'collapse' }}>
                       <thead>
-                        <tr className="border-b border-black text-black font-black">
+                        <tr style={{ borderBottom: '1px solid #000000', fontWeight: 'bold' }}>
                           <th className="pb-1">ITEM</th>
                           <th className="pb-1 text-center w-8">QTY</th>
                           <th className="pb-1 text-right w-12">RATE</th>
                           <th className="pb-1 text-right w-14">TOTAL</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-dotted divide-zinc-400">
+                      <tbody>
                         {items.map((it, i) => (
-                          <tr key={i}>
+                          <tr key={i} style={{ borderBottom: '1px dotted #a1a1aa' }}>
                             <td className="py-1 font-semibold pr-1">{it.description || 'Item'}</td>
                             <td className="py-1 text-center">{it.quantity}</td>
                             <td className="py-1 text-right">৳{it.rate}</td>
@@ -679,7 +915,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
 
                   {/* POS Totals */}
-                  <div className="space-y-0.5 text-[11px] border-b-2 border-black pb-2">
+                  <div
+                    className="space-y-0.5 text-[11px] pb-2"
+                    style={{ borderBottom: '2px solid #000000' }}
+                  >
                     <div className="flex justify-between">
                       <span>SUBTOTAL:</span>
                       <span className="font-bold">৳{subtotal}</span>
@@ -690,7 +929,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                         <span>-৳{discount}</span>
                       </div>
                     )}
-                    <div className="flex justify-between font-black text-xs pt-1 border-t border-black">
+                    <div
+                      className="flex justify-between font-black text-xs pt-1"
+                      style={{ borderTop: '1px solid #000000' }}
+                    >
                       <span>NET TOTAL:</span>
                       <span>৳{grandTotal}</span>
                     </div>
@@ -699,7 +941,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                       <span>৳{paid}</span>
                     </div>
                     {due > 0 && (
-                      <div className="flex justify-between font-bold text-rose-700">
+                      <div className="flex justify-between font-bold" style={{ color: '#b91c1c' }}>
                         <span>DUE:</span>
                         <span>৳{due}</span>
                       </div>
@@ -707,13 +949,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
 
                   {/* POS Signature Line */}
-                  <div className="pt-5 pb-1 flex justify-between text-[9px] text-zinc-700">
+                  <div className="pt-5 pb-1 flex justify-between text-[9px]" style={{ color: '#3f3f46' }}>
                     <div className="text-center">
-                      <div className="border-b border-zinc-500 w-24 mb-1"></div>
+                      <div className="w-24 mb-1" style={{ borderBottom: '1px solid #71717a' }}></div>
                       <span>Customer Sign</span>
                     </div>
                     <div className="text-center">
-                      <div className="border-b border-zinc-500 w-24 mb-1"></div>
+                      <div className="w-24 mb-1" style={{ borderBottom: '1px solid #71717a' }}></div>
                       <span>Authorized Sign</span>
                     </div>
                   </div>
@@ -722,30 +964,46 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   <div className="text-center pt-2 space-y-0.5 text-[9px]">
                     <div className="tracking-[4px] font-mono font-bold text-xs">||| | |||| | ||||| |||</div>
                     <p className="font-bold">THANK YOU FOR YOUR VISIT!</p>
-                    <p className="text-zinc-500">PLEASE COME AGAIN</p>
+                    <p style={{ color: '#71717a' }}>PLEASE COME AGAIN</p>
                   </div>
                 </div>
               )}
             </div>
 
             {/* Print & Download Action Buttons */}
-            <div className="w-full max-w-lg mt-4 flex items-center gap-2.5 no-print">
+            <div className="w-full max-w-[620px] mt-4 flex flex-wrap items-center gap-2.5 no-print">
               <button
                 type="button"
                 onClick={handlePrint}
-                className="flex-1 py-3 px-4 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-98"
+                disabled={isPrinting}
+                className="flex-1 min-w-[140px] py-3 px-4 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-98 disabled:opacity-50"
               >
                 <Printer className="w-4 h-4 text-emerald-400" />
-                <span>Print {paperSize === 'thermal' ? '88mm POS Receipt' : 'A4 Invoice'}</span>
+                <span>
+                  {isPrinting
+                    ? 'Opening Print Dialog...'
+                    : `Print ${paperSize === 'thermal' ? '88mm Thermal POS' : 'A4 Invoice'}`}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintInNewWindow}
+                className="py-3 px-3.5 bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 text-zinc-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-2xs"
+                title="Open clean printable view in new browser tab"
+              >
+                <Printer className="w-4 h-4 text-zinc-600" />
+                <span className="hidden sm:inline">Print in New Tab</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleDownloadImage}
-                className="flex-1 py-3 px-4 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-xl text-xs font-bold text-zinc-800 flex items-center justify-center gap-2 transition-all shadow-xs"
+                disabled={isDownloading}
+                className="flex-1 min-w-[130px] py-3 px-4 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-xl text-xs font-bold text-zinc-800 flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
               >
                 <Download className="w-4 h-4 text-indigo-600" />
-                <span>Download PNG</span>
+                <span>{isDownloading ? 'Generating PNG...' : 'Download PNG'}</span>
               </button>
             </div>
           </div>

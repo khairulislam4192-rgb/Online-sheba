@@ -6,24 +6,39 @@
   }
 }
 
+/* Print container hidden during normal app usage */
+#print-mount-container {
+  display: none;
+}
+
+/* Force browser print engine to retain exact colors, backgrounds, borders and styling */
 @media print {
-  body * {
-    visibility: hidden;
+  @page {
+    margin: 5mm;
+    size: auto;
   }
-  #printable-receipt, #printable-receipt * {
-    visibility: visible;
+
+  html, body {
+    background: #ffffff !important;
+    color: #111827 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
-  #printable-receipt {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 12px;
-    background: white;
-    color: black;
-  }
+
   .no-print {
     display: none !important;
+  }
+
+  /* Ensure printable elements retain their colors and backgrounds */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
 }
