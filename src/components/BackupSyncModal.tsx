@@ -49,10 +49,11 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success: boolean; message: string; count?: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ success: boolean; message: string; count?: number; warning?: string } | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
   const [showSql, setShowSql] = useState(false);
   const [stats, setStats] = useState({ localCount: 0, remoteCount: 0, pendingCount: 0, isConnected: false });
+  const [fileRestoreNotice, setFileRestoreNotice] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -61,6 +62,7 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
       setSupabaseKey(config.anonKey || '');
       setTestResult(null);
       setSyncResult(null);
+      setFileRestoreNotice(null);
 
       // Fetch stats
       getSyncStats(userId).then(setStats);
@@ -126,14 +128,22 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
         const content = event.target?.result as string;
         const res = await restoreFullBackupJson(userId, content);
         if (res.success) {
-          alert(`Backup restored successfully! ${res.restoredTxs} transactions and ${res.restoredCats} categories restored.`);
+          setFileRestoreNotice({
+            success: true,
+            message: `ব্যাকআপ সফলভাবে রিস্টোর হয়েছে! ${res.restoredTxs}টি লেনদেন এবং ${res.restoredCats}টি ক্যাটাগরি সংরক্ষিত হয়েছে।`,
+          });
           onDataRestored();
-          onClose();
         } else {
-          alert('Failed to restore backup: ' + res.message);
+          setFileRestoreNotice({
+            success: false,
+            message: 'ব্যাকআপ রিস্টোর ব্যর্থ হয়েছে: ' + (res.message || 'অজানা ত্রুটি'),
+          });
         }
       } catch (err: any) {
-        alert('Invalid backup file: ' + err.message);
+        setFileRestoreNotice({
+          success: false,
+          message: 'ফাইল ত্রুটি: ' + err.message,
+        });
       }
     };
     reader.readAsText(file);
@@ -213,14 +223,20 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
 
             {syncResult && (
               <div
-                className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
                   syncResult.success
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-rose-50 border-rose-200 text-rose-900'
                 }`}
               >
-                {syncResult.success ? <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />}
-                <span>{syncResult.message}</span>
+                {syncResult.success ? (
+                  <Check className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1">
+                  <p className="font-semibold whitespace-pre-line leading-relaxed">{syncResult.message}</p>
+                </div>
               </div>
             )}
           </div>
@@ -234,6 +250,23 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
             <p className="text-zinc-500 text-[11px]">
               যেকোনো সময় ১-ক্লিকে আপনার সব সেলস, খরচ এবং ক্যাটাগরির ফুল ব্যাকআপ ফাইল ডাউনলোড করে রাখতে পারেন এবং পরবর্তীতে রিস্টোর করতে পারেন।
             </p>
+
+            {fileRestoreNotice && (
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                  fileRestoreNotice.success
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {fileRestoreNotice.success ? (
+                  <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                )}
+                <span>{fileRestoreNotice.message}</span>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button

@@ -14,7 +14,7 @@
 /* Force browser print engine to retain exact colors, backgrounds, borders and styling */
 @media print {
   @page {
-    margin: 5mm;
+    margin: 4mm;
     size: auto;
   }
 
@@ -29,6 +29,22 @@
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     color-adjust: exact !important;
+  }
+
+  body.printing-active > #root {
+    display: none !important;
+  }
+
+  body.printing-active > #print-mount-container {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    background: #ffffff !important;
+    visibility: visible !important;
+  }
+
+  body.printing-active > #print-mount-container * {
+    visibility: visible !important;
   }
 
   .no-print {

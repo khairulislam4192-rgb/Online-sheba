@@ -20,6 +20,7 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
   const [isPrinting, setIsPrinting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [copiedTrx, setCopiedTrx] = useState(false);
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
 
   if (!transaction) return null;
@@ -67,6 +68,32 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
   const receiptNo = transaction.trx_id || `AGT-${dateObj.getTime().toString().slice(-6)}`;
 
   const triggerPrintHtml = (printContentHtml: string) => {
+    // 1. Direct mount into #print-mount-container
+    const printContainer = document.getElementById('print-mount-container');
+    if (printContainer) {
+      printContainer.innerHTML = printContentHtml;
+      document.body.classList.add('printing-active');
+
+      const cleanup = () => {
+        document.body.classList.remove('printing-active');
+        if (printContainer) printContainer.innerHTML = '';
+        setIsPrinting(false);
+      };
+
+      window.onafterprint = cleanup;
+
+      setTimeout(() => {
+        try {
+          window.print();
+        } catch (e) {
+          console.warn('Direct print error:', e);
+        }
+        setTimeout(cleanup, 3000);
+      }, 150);
+      return;
+    }
+
+    // 2. Hidden iframe fallback
     const oldIframes = document.querySelectorAll('.agent-receipt-print-iframe');
     oldIframes.forEach((el) => el.remove());
 
@@ -83,6 +110,7 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
     const doc = iframe.contentWindow?.document || iframe.contentDocument;
     if (!doc) {
       window.print();
+      setIsPrinting(false);
       return;
     }
 
@@ -131,26 +159,26 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
         iframe.contentWindow?.print();
       } catch (e) {
         console.error('Print iframe error:', e);
-        window.print();
       } finally {
+        setIsPrinting(false);
         setTimeout(() => {
           iframe.remove();
         }, 3000);
       }
-    }, 450);
+    }, 350);
   };
 
   const handlePrint = () => {
     if (!receiptRef.current) return;
     setIsPrinting(true);
+    setPrintNotice('প্রিন্ট প্রস্তুত হচ্ছে...');
+    setTimeout(() => setPrintNotice(null), 3500);
     try {
       const html = receiptRef.current.innerHTML;
       triggerPrintHtml(html);
     } catch (e) {
       console.error(e);
-      window.print();
-    } finally {
-      setTimeout(() => setIsPrinting(false), 800);
+      setIsPrinting(false);
     }
   };
 
@@ -169,8 +197,10 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      setPrintNotice('মানি রিসিট স্লিপ সফলভাবে ডাউনলোড হয়েছে!');
+      setTimeout(() => setPrintNotice(null), 3500);
     } catch (err: any) {
-      alert('Could not download slip: ' + (err.message || 'Error occurred'));
+      setPrintNotice('ডাউনলোড সমস্যা: ' + (err.message || 'Error occurred'));
     } finally {
       setIsDownloading(false);
     }
@@ -246,13 +276,20 @@ export const AgentReceiptModal: React.FC<AgentReceiptModalProps> = ({
             <button
               onClick={handlePrint}
               disabled={isPrinting}
-              className="flex items-center gap-1.5 text-xs font-bold px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-all active:scale-95"
+              className="flex items-center gap-1.5 text-xs font-bold px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-all active:scale-95 disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>{isPrinting ? 'Printing...' : 'Print Slip'}</span>
+              <span>{isPrinting ? 'Opening Print...' : 'Print Slip'}</span>
             </button>
           </div>
         </div>
+
+        {/* Print Notice Feedback */}
+        {printNotice && (
+          <div className="mx-5 mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between no-print">
+            <span>{printNotice}</span>
+          </div>
+        )}
 
         {/* Slip Preview Container */}
         <div className="p-4 sm:p-6 bg-zinc-100/70 overflow-x-auto flex justify-center max-h-[65vh] overflow-y-auto">

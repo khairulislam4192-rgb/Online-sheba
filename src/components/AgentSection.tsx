@@ -73,6 +73,7 @@ export const AgentSection: React.FC<AgentSectionProps> = ({
   const [note, setNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Filters & Date Search State
   const [selectedDateFilter, setSelectedDateFilter] = useState<DateFilterType>('today');
@@ -267,14 +268,15 @@ export const AgentSection: React.FC<AgentSectionProps> = ({
 
   // Submit Handler
   const handleSubmit = async (andPrint: boolean = false) => {
+    setFormError(null);
     const numAmount = Number(amount);
     if (!numAmount || numAmount <= 0) {
-      alert('অনুগ্রহ করে সঠিক টাকার পরিমাণ লিখুন।');
+      setFormError('অনুগ্রহ করে সঠিক টাকার পরিমাণ লিখুন।');
       return;
     }
 
     if (!customerPhone.trim() && type !== 'dsr_balance_in' && type !== 'balance_adjustment') {
-      alert('অনুগ্রহ করে গ্রাহকের মোবাইল নম্বর লিখুন।');
+      setFormError('অনুগ্রহ করে গ্রাহকের মোবাইল নম্বর লিখুন।');
       return;
     }
 
@@ -301,12 +303,13 @@ export const AgentSection: React.FC<AgentSectionProps> = ({
       setCustomCommission('');
       setBillNumber('');
       setNote('');
+      setFormError(null);
 
       if (andPrint) {
         setPrintingTx(created);
       }
     } catch (err: any) {
-      alert('লেনদেন সংরক্ষণ করতে সমস্যা হয়েছে: ' + (err.message || 'Error'));
+      setFormError('লেনদেন সংরক্ষণ করতে সমস্যা হয়েছে: ' + (err.message || 'Error'));
     } finally {
       setIsSubmitting(false);
     }
@@ -728,6 +731,14 @@ export const AgentSection: React.FC<AgentSectionProps> = ({
               className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
             />
           </div>
+
+          {/* Form Error Banner */}
+          {formError && (
+            <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-600 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
 
           {/* Action Buttons: Save Only / Save & Print Slip */}
           <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2.5">

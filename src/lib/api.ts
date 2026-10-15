@@ -38,15 +38,16 @@ export const SQL_SETUP_SCRIPT = `-- ============================================
 -- Execute this script in your Supabase SQL Editor:
 -- ========================================================
 
--- 1. Create Categories Table
+-- 1. Create or Upgrade Categories Table
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   user_id TEXT,
   name TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS user_id TEXT;
 
--- 2. Create Transactions Table (Sales & Expenses)
+-- 2. Create or Upgrade Transactions Table (Sales & Expenses)
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   user_id TEXT,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   receipt_url TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- 3. Create Agent Wallets Table (bKash & Nagad Agent SIMs)
 CREATE TABLE IF NOT EXISTS agent_wallets (
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS agent_wallets (
   cash_in_hand NUMERIC(14, 2) DEFAULT 0,
   updated_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE agent_wallets ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- 4. Create Agent Transactions Table (Cash In, Cash Out, Bill Pay, DSR Load)
 CREATE TABLE IF NOT EXISTS agent_transactions (
@@ -90,6 +93,7 @@ CREATE TABLE IF NOT EXISTS agent_transactions (
   wallet_id TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE agent_transactions ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- 5. Enable Row Level Security (RLS) & Allow Read/Write
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
@@ -137,7 +141,15 @@ export function generateUUID(): string {
   });
 }
 
-// ---------------- DYNAMIC SUPABASE CLIENT ----------------
+// Convert any string identifier to a strictly valid PostgreSQL UUID
+export function toValidUUID(id?: string): string {
+  if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return id;
+  }
+  return generateUUID();
+}
+
+// ---------------- DYNAMIC SUPABASE CLIENT & SCHEMA ADAPTER ----------------
 
 export function getStoredSupabaseConfig() {
   const storedUrl = localStorage.getItem(LOCAL_STORAGE_KEYS.SUPABASE_URL) || DEFAULT_SUPABASE_URL;
@@ -151,6 +163,61 @@ export function getStoredSupabaseConfig() {
 let activeClient: SupabaseClient | null = null;
 let currentClientUrl = '';
 let currentClientKey = '';
+
+export interface SchemaCapabilities {
+  transactionsHasUserId: boolean;
+  categoriesHasUserId: boolean;
+  hasAgentWalletsTable: boolean;
+  hasAgentTransactionsTable: boolean;
+}
+
+let cachedCapabilities: SchemaCapabilities | null = null;
+
+export function resetSchemaCapabilitiesCache() {
+  cachedCapabilities = null;
+}
+
+export async function detectSchemaCapabilities(client: SupabaseClient): Promise<SchemaCapabilities> {
+  if (cachedCapabilities) return cachedCapabilities;
+
+  const caps: SchemaCapabilities = {
+    transactionsHasUserId: false,
+    categoriesHasUserId: false,
+    hasAgentWalletsTable: false,
+    hasAgentTransactionsTable: false,
+  };
+
+  try {
+    const { error: txErr } = await client.from('transactions').select('user_id').limit(1);
+    caps.transactionsHasUserId = !txErr || (txErr.code !== '42703' && !txErr.message?.includes('user_id'));
+  } catch {
+    caps.transactionsHasUserId = false;
+  }
+
+  try {
+    const { error: catErr } = await client.from('categories').select('user_id').limit(1);
+    caps.categoriesHasUserId = !catErr || (catErr.code !== '42703' && !catErr.message?.includes('user_id'));
+  } catch {
+    caps.categoriesHasUserId = false;
+  }
+
+  try {
+    const { error: wErr } = await client.from('agent_wallets').select('id').limit(1);
+    caps.hasAgentWalletsTable = !wErr || (wErr.code !== 'PGRST205' && wErr.code !== '42P01' && !wErr.message?.includes('not find'));
+  } catch {
+    caps.hasAgentWalletsTable = false;
+  }
+
+  try {
+    const { error: atErr } = await client.from('agent_transactions').select('id').limit(1);
+    caps.hasAgentTransactionsTable = !atErr || (atErr.code !== 'PGRST205' && atErr.code !== '42P01' && !atErr.message?.includes('not find'));
+  } catch {
+    caps.hasAgentTransactionsTable = false;
+  }
+
+  cachedCapabilities = caps;
+  return caps;
+}
 
 export function getSupabase(): SupabaseClient | null {
   const { url, anonKey } = getStoredSupabaseConfig();
@@ -169,6 +236,7 @@ export function getSupabase(): SupabaseClient | null {
     });
     currentClientUrl = url;
     currentClientKey = anonKey;
+    resetSchemaCapabilitiesCache();
     return activeClient;
   } catch (err) {
     console.warn('Failed to initialize Supabase client:', err);
@@ -182,6 +250,7 @@ export function saveSupabaseConfig(url: string, key: string) {
   localStorage.setItem(LOCAL_STORAGE_KEYS.SUPABASE_URL, cleanUrl);
   localStorage.setItem(LOCAL_STORAGE_KEYS.SUPABASE_KEY, cleanKey);
   activeClient = null;
+  resetSchemaCapabilitiesCache();
 }
 
 export async function testSupabaseConnection(
@@ -565,14 +634,16 @@ export async function addCategory(userId: string, name: string): Promise<Categor
   const client = getSupabase();
   if (client) {
     try {
-      await client.from('categories').insert([
-        {
-          id: newCat.id,
-          user_id: userId,
-          name: trimmed,
-          created_at: newCat.created_at,
-        },
-      ]);
+      const caps = await detectSchemaCapabilities(client);
+      const row: any = {
+        id: toValidUUID(newCat.id),
+        name: trimmed,
+        created_at: newCat.created_at,
+      };
+      if (caps.categoriesHasUserId) {
+        row.user_id = userId;
+      }
+      await client.from('categories').insert([row]);
     } catch (err) {
       console.warn('Supabase addCategory background sync warning:', err);
     }
@@ -632,10 +703,12 @@ export async function fetchTransactions(userId: string): Promise<Transaction[]> 
 
   if (client) {
     try {
-      const { data, error } = await client
-        .from('transactions')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const caps = await detectSchemaCapabilities(client);
+      let query = client.from('transactions').select('*');
+      if (caps.transactionsHasUserId) {
+        query = query.eq('user_id', userId);
+      }
+      const { data, error } = await query.order('created_at', { ascending: false });
 
       if (!error && data) {
         // Merge remote and local transactions to guarantee NO loss
@@ -683,21 +756,23 @@ export async function addTransaction(
   const client = getSupabase();
   if (client) {
     try {
-      const { error } = await client.from('transactions').insert([
-        {
-          id: txId,
-          user_id: userId,
-          type: tx.type,
-          category: tx.category,
-          description: tx.description,
-          amount: tx.amount,
-          payment_method: tx.payment_method,
-          customer_name: tx.customer_name || null,
-          customer_phone: tx.customer_phone || null,
-          receipt_url: tx.receipt_url || null,
-          created_at: now,
-        },
-      ]);
+      const caps = await detectSchemaCapabilities(client);
+      const row: any = {
+        id: toValidUUID(txId),
+        type: tx.type,
+        category: tx.category,
+        description: tx.description,
+        amount: tx.amount,
+        payment_method: tx.payment_method,
+        customer_name: tx.customer_name || null,
+        customer_phone: tx.customer_phone || null,
+        receipt_url: tx.receipt_url || null,
+        created_at: now,
+      };
+      if (caps.transactionsHasUserId) {
+        row.user_id = userId;
+      }
+      const { error } = await client.from('transactions').insert([row]);
 
       if (error) {
         console.warn('Supabase direct insert error, queueing pending sync:', error.message);
@@ -765,9 +840,12 @@ export async function getSyncStats(userId: string) {
   const client = getSupabase();
   if (client) {
     try {
-      const { count, error } = await client
-        .from('transactions')
-        .select('*', { count: 'exact', head: true });
+      const caps = await detectSchemaCapabilities(client);
+      let query = client.from('transactions').select('*', { count: 'exact', head: true });
+      if (caps.transactionsHasUserId) {
+        query = query.eq('user_id', userId);
+      }
+      const { count, error } = await query;
       if (!error) {
         remoteCount = count || 0;
         isConnected = true;
@@ -787,7 +865,7 @@ export async function getSyncStats(userId: string) {
 
 export async function syncAllDataToSupabase(
   userId: string
-): Promise<{ success: boolean; message: string; count?: number }> {
+): Promise<{ success: boolean; message: string; count?: number; warning?: string }> {
   const client = getSupabase();
   if (!client) {
     return {
@@ -802,41 +880,77 @@ export async function syncAllDataToSupabase(
   const localAgentTxs = getLocalAgentTransactions(userId);
 
   try {
-    // 1. Sync Categories
+    const caps = await detectSchemaCapabilities(client);
+    let syncedTxs = 0;
+    let syncedCats = 0;
+    let syncedWallets = 0;
+    let syncedAgentTxs = 0;
+    let agentWarning = '';
+
+    // 1. Sync Categories (safely omitting user_id if table doesn't have it)
     if (localCats.length > 0) {
-      const catPayload = localCats.map((c) => ({
-        id: c.id,
-        user_id: userId,
-        name: c.name,
-        created_at: c.created_at,
-      }));
-      await client.from('categories').upsert(catPayload, { onConflict: 'id' });
-    }
-
-    // 2. Sync Transactions
-    if (localTxs.length > 0) {
-      const txPayload = localTxs.map((t) => ({
-        id: t.id,
-        user_id: userId,
-        type: t.type,
-        category: t.category,
-        description: t.description,
-        amount: t.amount,
-        payment_method: t.payment_method,
-        customer_name: t.customer_name || null,
-        customer_phone: t.customer_phone || null,
-        receipt_url: t.receipt_url || null,
-        created_at: t.created_at,
-      }));
-
-      const { error } = await client.from('transactions').upsert(txPayload, { onConflict: 'id' });
-      if (error) {
-        throw error;
+      const catPayload = localCats.map((c) => {
+        const item: any = {
+          id: toValidUUID(c.id),
+          name: c.name,
+          created_at: c.created_at,
+        };
+        if (caps.categoriesHasUserId) {
+          item.user_id = userId;
+        }
+        return item;
+      });
+      const { error: catErr } = await client.from('categories').upsert(catPayload, { onConflict: 'id' });
+      if (catErr) {
+        console.warn('Category sync warning:', catErr.message);
+      } else {
+        syncedCats = catPayload.length;
       }
     }
 
-    // 3. Sync Agent Wallets
-    if (localWallets.length > 0) {
+    // 2. Sync Transactions (safely omitting user_id if table doesn't have it)
+    if (localTxs.length > 0) {
+      const txPayload = localTxs.map((t) => {
+        const item: any = {
+          id: toValidUUID(t.id),
+          type: t.type,
+          category: t.category,
+          description: t.description,
+          amount: t.amount,
+          payment_method: t.payment_method,
+          customer_name: t.customer_name || null,
+          customer_phone: t.customer_phone || null,
+          receipt_url: t.receipt_url || null,
+          created_at: t.created_at,
+        };
+        if (caps.transactionsHasUserId) {
+          item.user_id = userId;
+        }
+        return item;
+      });
+
+      const { error } = await client.from('transactions').upsert(txPayload, { onConflict: 'id' });
+      if (error) {
+        // If error was about user_id, retry without user_id
+        if (error.code === 'PGRST204' || error.message?.includes('user_id')) {
+          caps.transactionsHasUserId = false;
+          const retryPayload = txPayload.map((row) => {
+            const { user_id, ...rest } = row;
+            return rest;
+          });
+          const { error: retryErr } = await client.from('transactions').upsert(retryPayload, { onConflict: 'id' });
+          if (retryErr) throw retryErr;
+          syncedTxs = retryPayload.length;
+        } else {
+          throw error;
+        }
+      } else {
+        syncedTxs = txPayload.length;
+      }
+    }
+
+    // 3. Sync Agent Wallets (if table exists)
+    if (caps.hasAgentWalletsTable && localWallets.length > 0) {
       const walletPayload = localWallets.map((w) => ({
         id: w.id,
         user_id: userId,
@@ -848,16 +962,19 @@ export async function syncAllDataToSupabase(
         updated_at: w.updated_at,
       }));
       try {
-        await client.from('agent_wallets').upsert(walletPayload, { onConflict: 'id' });
+        const { error } = await client.from('agent_wallets').upsert(walletPayload, { onConflict: 'id' });
+        if (!error) syncedWallets = walletPayload.length;
       } catch (e) {
         console.warn('Agent wallets sync note:', e);
       }
+    } else if (!caps.hasAgentWalletsTable && (localWallets.length > 0 || localAgentTxs.length > 0)) {
+      agentWarning = 'বিঃদ্রঃ বিকাশ/নগদ এজেন্ট টেবিল এখনো সুপাবেজে তৈরি হয়নি। SQL স্ক্রিপ্টটি সুপাবেজ SQL এডিটরে রান করলে এজেন্ট হিসাবও ক্লাউডে সেভ হবে।';
     }
 
-    // 4. Sync Agent Transactions
-    if (localAgentTxs.length > 0) {
+    // 4. Sync Agent Transactions (if table exists)
+    if (caps.hasAgentTransactionsTable && localAgentTxs.length > 0) {
       const agentTxPayload = localAgentTxs.map((at) => ({
-        id: at.id,
+        id: toValidUUID(at.id),
         user_id: userId,
         provider: at.provider,
         type: at.type,
@@ -873,7 +990,8 @@ export async function syncAllDataToSupabase(
         created_at: at.created_at,
       }));
       try {
-        await client.from('agent_transactions').upsert(agentTxPayload, { onConflict: 'id' });
+        const { error } = await client.from('agent_transactions').upsert(agentTxPayload, { onConflict: 'id' });
+        if (!error) syncedAgentTxs = agentTxPayload.length;
       } catch (e) {
         console.warn('Agent transactions sync note:', e);
       }
@@ -882,15 +1000,24 @@ export async function syncAllDataToSupabase(
     // Clear pending sync
     localStorage.removeItem(LOCAL_STORAGE_KEYS.PENDING_SYNC);
 
+    let message = `সফলভাবে ${syncedTxs}টি লেনদেন ও ${syncedCats}টি ক্যাটাগরি সুপাবেজ ক্লাউডে ব্যাকআপ হয়েছে!`;
+    if (syncedAgentTxs > 0 || syncedWallets > 0) {
+      message += ` (${syncedAgentTxs}টি এজেন্ট লেনদেন সিঙ্ক হয়েছে)`;
+    }
+    if (agentWarning) {
+      message += `\n${agentWarning}`;
+    }
+
     return {
       success: true,
-      message: `Successfully synced ${localTxs.length} transactions, ${localAgentTxs.length} agent entries, and ${localCats.length} categories to Supabase Cloud!`,
-      count: localTxs.length + localAgentTxs.length,
+      message,
+      count: syncedTxs + syncedAgentTxs,
+      warning: agentWarning || undefined,
     };
   } catch (err: any) {
     return {
       success: false,
-      message: `Sync failed: ${err.message || 'Please verify database tables exist and RLS policies are applied'}.`,
+      message: `সিঙ্ক সমস্যা: ${err.message || 'দয়া করে ডাটাবেজ চেক করুন'}`,
     };
   }
 }
@@ -1168,7 +1295,10 @@ export async function updateAgentWallet(userId: string, updatedWallet: AgentWall
   const client = getSupabase();
   if (client) {
     try {
-      await client.from('agent_wallets').upsert([updatedWallet], { onConflict: 'id' });
+      const caps = await detectSchemaCapabilities(client);
+      if (caps.hasAgentWalletsTable) {
+        await client.from('agent_wallets').upsert([updatedWallet], { onConflict: 'id' });
+      }
     } catch (e) {
       console.warn('Supabase updateAgentWallet note:', e);
     }
@@ -1282,7 +1412,15 @@ export async function addAgentTransaction(
   const client = getSupabase();
   if (client) {
     try {
-      await client.from('agent_transactions').insert([newTx]);
+      const caps = await detectSchemaCapabilities(client);
+      if (caps.hasAgentTransactionsTable) {
+        await client.from('agent_transactions').insert([
+          {
+            ...newTx,
+            id: toValidUUID(newTx.id),
+          },
+        ]);
+      }
     } catch (e) {
       console.warn('Supabase addAgentTransaction note:', e);
     }
@@ -1330,7 +1468,10 @@ export async function deleteAgentTransaction(userId: string, id: string): Promis
   const client = getSupabase();
   if (client) {
     try {
-      await client.from('agent_transactions').delete().eq('id', id);
+      const caps = await detectSchemaCapabilities(client);
+      if (caps.hasAgentTransactionsTable) {
+        await client.from('agent_transactions').delete().eq('id', id);
+      }
     } catch (e) {
       console.warn('Supabase deleteAgentTransaction note:', e);
     }

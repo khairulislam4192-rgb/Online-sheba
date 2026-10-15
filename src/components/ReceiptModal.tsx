@@ -45,6 +45,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isSavedInDb, setIsSavedInDb] = useState(false);
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
 
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -123,20 +124,46 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      setPrintNotice('ক্যাশ মেমো ইমেজ সফলভাবে ডাউনলোড হয়েছে!');
+      setTimeout(() => setPrintNotice(null), 3500);
     } catch (err: any) {
-      alert('Could not download memo image: ' + (err.message || 'Error occurred'));
+      setPrintNotice('ডাউনলোড সমস্যা: ' + (err.message || 'Error occurred'));
     } finally {
       setIsDownloading(false);
     }
   };
 
-  // Foolproof print engine matching preview 100% for A4 or 88mm Thermal POS
+  // Modern print engine with direct DOM mount + hidden iframe fallback
   const triggerPrintHtml = (printContentHtml: string) => {
-    // 1. Remove old print iframes
+    // 1. Direct mount into #print-mount-container
+    const printContainer = document.getElementById('print-mount-container');
+    if (printContainer) {
+      printContainer.innerHTML = printContentHtml;
+      document.body.classList.add('printing-active');
+
+      const cleanup = () => {
+        document.body.classList.remove('printing-active');
+        if (printContainer) printContainer.innerHTML = '';
+        setIsPrinting(false);
+      };
+
+      window.onafterprint = cleanup;
+
+      setTimeout(() => {
+        try {
+          window.print();
+        } catch (e) {
+          console.warn('Direct print error:', e);
+        }
+        setTimeout(cleanup, 3000);
+      }, 150);
+      return;
+    }
+
+    // 2. Hidden iframe fallback
     const oldIframes = document.querySelectorAll('.receipt-print-iframe');
     oldIframes.forEach((el) => el.remove());
 
-    // 2. Create isolated hidden iframe
     const iframe = document.createElement('iframe');
     iframe.className = 'receipt-print-iframe';
     iframe.style.position = 'fixed';
@@ -150,6 +177,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     const doc = iframe.contentWindow?.document || iframe.contentDocument;
     if (!doc) {
       window.print();
+      setIsPrinting(false);
       return;
     }
 
@@ -167,9 +195,6 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         <head>
           <meta charset="utf-8" />
           <title>${shopName || 'Online Sheba'} - Cash Memo ${receiptNumber}</title>
-          <link rel="preconnect" href="https://fonts.googleapis.com">
-          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-          <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700;800;900&family=Hind+Siliguri:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
           <style>
             * {
               box-sizing: border-box;
@@ -200,86 +225,28 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
       } catch (err) {
-        console.warn('iframe print was blocked, falling back to new window print:', err);
-        handlePrintInNewWindow();
+        console.warn('iframe print exception:', err);
       } finally {
+        setIsPrinting(false);
         setTimeout(() => {
           iframe.remove();
-        }, 5000);
+        }, 4000);
       }
-    }, 400);
+    }, 350);
   };
 
   const handlePrint = () => {
     if (!receiptRef.current) return;
     setIsPrinting(true);
+    setPrintNotice('প্রিন্ট প্রস্তুত হচ্ছে... (অথবা সরাসরি পাশে "ডাউনলোড" করতে পারেন)');
+    setTimeout(() => setPrintNotice(null), 4000);
     try {
       const html = receiptRef.current.outerHTML;
       triggerPrintHtml(html);
     } catch (e) {
       console.error('Print failed:', e);
-      handlePrintInNewWindow();
-    } finally {
       setIsPrinting(false);
     }
-  };
-
-  const handlePrintInNewWindow = () => {
-    if (!receiptRef.current) return;
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Pop-up was blocked. Please allow popups for this site to open print window.');
-      return;
-    }
-    const isThermal = paperSize === 'thermal';
-    const html = receiptRef.current.outerHTML;
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>${shopName || 'Online Sheba'} - Cash Memo ${receiptNumber}</title>
-          <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700;800;900&family=Hind+Siliguri:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-          <style>
-            * {
-              box-sizing: border-box;
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-              color-adjust: exact !important;
-            }
-            body {
-              margin: 0;
-              padding: ${isThermal ? '6px' : '20px'};
-              background: #ffffff;
-              color: #111827;
-              display: flex;
-              justify-content: center;
-              font-family: ${isThermal ? "'JetBrains Mono', monospace" : "'Geist', 'Hind Siliguri', sans-serif"};
-            }
-            .wrapper {
-              width: ${isThermal ? '78mm' : '100%'};
-              max-width: ${isThermal ? '78mm' : '680px'};
-            }
-            @page {
-              size: ${isThermal ? '80mm auto' : 'A4 portrait'};
-              margin: ${isThermal ? '2mm' : '8mm'};
-            }
-          </style>
-        </head>
-        <body>
-          <div class="wrapper">
-            ${html}
-          </div>
-          <script>
-            window.onload = function() {
-              window.focus();
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
   };
 
   const handleUploadAndSave = async () => {
@@ -970,40 +937,37 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               )}
             </div>
 
+            {/* Print Notice Toast/Feedback */}
+            {printNotice && (
+              <div className="w-full max-w-[620px] mt-2.5 p-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold flex items-center justify-between no-print">
+                <span>{printNotice}</span>
+              </div>
+            )}
+
             {/* Print & Download Action Buttons */}
             <div className="w-full max-w-[620px] mt-4 flex flex-wrap items-center gap-2.5 no-print">
               <button
                 type="button"
                 onClick={handlePrint}
                 disabled={isPrinting}
-                className="flex-1 min-w-[140px] py-3 px-4 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-98 disabled:opacity-50"
+                className="flex-1 min-w-[150px] py-3 px-4 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-98 disabled:opacity-50"
               >
                 <Printer className="w-4 h-4 text-emerald-400" />
                 <span>
                   {isPrinting
                     ? 'Opening Print Dialog...'
-                    : `Print ${paperSize === 'thermal' ? '88mm Thermal POS' : 'A4 Invoice'}`}
+                    : `Print Memo (${paperSize === 'thermal' ? '88mm POS' : 'A4 Invoice'})`}
                 </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handlePrintInNewWindow}
-                className="py-3 px-3.5 bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 text-zinc-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-2xs"
-                title="Open clean printable view in new browser tab"
-              >
-                <Printer className="w-4 h-4 text-zinc-600" />
-                <span className="hidden sm:inline">Print in New Tab</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleDownloadImage}
                 disabled={isDownloading}
-                className="flex-1 min-w-[130px] py-3 px-4 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-xl text-xs font-bold text-zinc-800 flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
+                className="flex-1 min-w-[140px] py-3 px-4 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-xl text-xs font-bold text-zinc-800 flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
               >
                 <Download className="w-4 h-4 text-indigo-600" />
-                <span>{isDownloading ? 'Generating PNG...' : 'Download PNG'}</span>
+                <span>{isDownloading ? 'Generating PNG...' : 'Download Image / PNG'}</span>
               </button>
             </div>
           </div>
