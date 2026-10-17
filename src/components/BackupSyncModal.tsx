@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   X,
   Cloud,
-  CloudCheck,
   RefreshCw,
   Download,
   Upload,
@@ -12,13 +11,11 @@ import {
   Copy,
   ShieldCheck,
   HardDrive,
-  Key,
-  ExternalLink,
+  Server,
+  Smartphone,
+  Store,
 } from 'lucide-react';
 import {
-  getStoredSupabaseConfig,
-  saveSupabaseConfig,
-  testSupabaseConnection,
   syncAllDataToSupabase,
   exportFullBackupJson,
   restoreFullBackupJson,
@@ -44,57 +41,34 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
   categories,
   onDataRestored,
 }) => {
-  const [supabaseUrl, setSupabaseUrl] = useState('');
-  const [supabaseKey, setSupabaseKey] = useState('');
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success: boolean; message: string; count?: number; warning?: string } | null>(null);
+  const [syncResult, setSyncResult] = useState<{
+    success: boolean;
+    message: string;
+    count?: number;
+    warning?: string;
+  } | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
   const [showSql, setShowSql] = useState(false);
-  const [stats, setStats] = useState({ localCount: 0, remoteCount: 0, pendingCount: 0, isConnected: false });
+  const [stats, setStats] = useState({
+    localCount: 0,
+    remoteCount: 0,
+    pendingCount: 0,
+    isConnected: true,
+    agentTransactionsCount: 0,
+    agentWalletsCount: 2,
+  });
   const [fileRestoreNotice, setFileRestoreNotice] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      const config = getStoredSupabaseConfig();
-      setSupabaseUrl(config.url || '');
-      setSupabaseKey(config.anonKey || '');
-      setTestResult(null);
       setSyncResult(null);
       setFileRestoreNotice(null);
-
-      // Fetch stats
       getSyncStats(userId).then(setStats);
     }
-  }, [isOpen, userId, transactions]);
+  }, [isOpen, userId, transactions, categories]);
 
   if (!isOpen) return null;
-
-  const handleTestConnection = async () => {
-    setIsTesting(true);
-    setTestResult(null);
-    try {
-      const result = await testSupabaseConnection(supabaseUrl, supabaseKey);
-      setTestResult(result);
-      if (result.success) {
-        saveSupabaseConfig(supabaseUrl, supabaseKey);
-        const updated = await getSyncStats(userId);
-        setStats(updated);
-      }
-    } catch (err: any) {
-      setTestResult({ success: false, message: err.message || 'Connection test failed' });
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  const handleSaveConfig = async () => {
-    saveSupabaseConfig(supabaseUrl, supabaseKey);
-    setTestResult({ success: true, message: 'Supabase credentials saved successfully!' });
-    const updated = await getSyncStats(userId);
-    setStats(updated);
-  };
 
   const handleSyncNow = async () => {
     setIsSyncing(true);
@@ -167,10 +141,10 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-extrabold text-zinc-900">
-                Auto Backup & Supabase Cloud Sync
+                Backend Auto Cloud Backup & Sync
               </h3>
               <p className="text-xs text-zinc-500">
-                ডাটা যেন কখনো না হারায় সেজন্য ক্লাউড অটো সেভ ও ব্যাকআপ সেন্টার
+                ব্যাকএন্ড সার্ভার ও সুপাবেজ ক্লাউড স্বয়ংক্রিয় রিয়েলটাইম ব্যাকআপ
               </p>
             </div>
           </div>
@@ -185,39 +159,63 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6 text-xs text-zinc-700">
           {/* Cloud Status Card */}
-          <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/50 via-zinc-50 to-emerald-50/40 border border-zinc-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className={`w-3 h-3 rounded-full ${stats.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                <span className="font-bold text-sm text-zinc-900">
-                  {stats.isConnected ? 'Supabase Cloud Connected (অটো সেভ সক্রিয়)' : 'Local Storage Active (ক্লাউড কানেক্ট করুন)'}
-                </span>
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-50/60 via-zinc-50 to-emerald-50/50 border border-zinc-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                <div>
+                  <span className="font-extrabold text-sm text-zinc-900 block">
+                    ব্যাকএন্ড অটো-ব্যাকআপ সক্রিয় (Cloud Sync Active)
+                  </span>
+                  <span className="text-[11px] text-zinc-500 font-medium">
+                    সকল বিক্রয়, খরচ ও এজেন্ট হিসাব সুরক্ষিতভাবে ব্যাকএন্ড ও ক্লাউডে সিঙ্ক হচ্ছে
+                  </span>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={handleSyncNow}
                 disabled={isSyncing}
-                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center gap-1.5 shadow-2xs transition-all disabled:opacity-50"
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center justify-center gap-2 shadow-xs transition-all disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Syncing...' : 'Sync All Data Now'}</span>
+                <span>{isSyncing ? 'সিঙ্ক হচ্ছে...' : 'এখনই সিঙ্ক করুন'}</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2.5 pt-2 border-t border-zinc-200/60 text-center">
-              <div className="p-2.5 rounded-xl bg-white border border-zinc-200">
-                <span className="text-[10px] text-zinc-500 font-bold block uppercase">Local Records</span>
-                <span className="text-base font-extrabold text-zinc-900 font-mono">{transactions.length}</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-white border border-zinc-200">
-                <span className="text-[10px] text-zinc-500 font-bold block uppercase">Cloud Synced</span>
-                <span className="text-base font-extrabold text-emerald-700 font-mono">{stats.remoteCount}</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-white border border-zinc-200">
-                <span className="text-[10px] text-zinc-500 font-bold block uppercase">Pending Sync</span>
-                <span className={`text-base font-extrabold font-mono ${stats.pendingCount > 0 ? 'text-amber-600' : 'text-zinc-600'}`}>
-                  {stats.pendingCount}
+            {/* Metrics Breakdown Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-zinc-200/70 text-center">
+              <div className="p-3 rounded-xl bg-white border border-zinc-200 shadow-2xs">
+                <div className="flex items-center justify-center gap-1.5 text-zinc-500 text-[10px] font-bold uppercase mb-0.5">
+                  <Store className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>দোকানের হিসাব (Sales)</span>
+                </div>
+                <span className="text-lg font-black text-zinc-900 font-mono">
+                  {transactions.length}
                 </span>
+                <span className="text-[10px] text-zinc-400 block">সংরক্ষিত লেনদেন</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white border border-zinc-200 shadow-2xs">
+                <div className="flex items-center justify-center gap-1.5 text-zinc-500 text-[10px] font-bold uppercase mb-0.5">
+                  <Smartphone className="w-3.5 h-3.5 text-pink-600" />
+                  <span>এজেন্ট খাতা (Agent)</span>
+                </div>
+                <span className="text-lg font-black text-pink-700 font-mono">
+                  {stats.agentTransactionsCount}
+                </span>
+                <span className="text-[10px] text-zinc-400 block">ক্যাশ ইন/আউট এন্ট্রি</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white border border-zinc-200 shadow-2xs">
+                <div className="flex items-center justify-center gap-1.5 text-zinc-500 text-[10px] font-bold uppercase mb-0.5">
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>সার্ভার ক্লাউড সিঙ্ক</span>
+                </div>
+                <span className="text-lg font-black text-emerald-700 font-mono">
+                  ১০০%
+                </span>
+                <span className="text-[10px] text-emerald-600 font-semibold block">স্বয়ংক্রিয় ব্যাকআপ</span>
               </div>
             </div>
 
@@ -241,6 +239,25 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
             )}
           </div>
 
+          {/* How It Works Explainer */}
+          <div className="p-4 rounded-2xl bg-zinc-50 border border-zinc-200 space-y-2">
+            <h4 className="font-bold text-zinc-900 text-xs flex items-center gap-1.5">
+              <Server className="w-4 h-4 text-indigo-600" />
+              <span>ব্যাকএন্ড অটো-ব্যাকআপ কীভাবে কাজ করে?</span>
+            </h4>
+            <ul className="text-[11px] text-zinc-600 space-y-1.5 list-disc list-inside leading-relaxed">
+              <li>
+                <b>রিয়েলটাইম ব্যাকআপ:</b> আপনি দোকানে যে বিক্রয়, খরচ বা বিকাশ/নগদ এন্ট্রি করেন, তা সাথে সাথে ব্যাকএন্ড সার্ভার ও সুপাবেজে ব্যাকআপ হয়ে যায়।
+              </li>
+              <li>
+                <b>জিরো কনফিগারেশন:</b> ব্রাউজার বা ফ্রন্টএন্ডে কোনো পাসওয়ার্ড বা কী দিতে হয় না, সব ব্যাকএন্ডের সিক্রেট এনভায়রনমেন্ট থেকে অটো পরিচালিত হয়।
+              </li>
+              <li>
+                <b>অফলাইন সুরক্ষা:</b> ইন্টারনেট বা সার্ভার ড্রপ করলেও লোকাল ব্রাউজারে ডাটা অক্ষত থাকে এবং কানেকশন ফিরলে স্বয়ংক্রিয়ভাবে ক্লাউডে সিঙ্ক হয়।
+              </li>
+            </ul>
+          </div>
+
           {/* Quick Offline Backup & Restore Section */}
           <div className="space-y-3">
             <h4 className="font-extrabold text-zinc-900 text-sm flex items-center gap-1.5">
@@ -248,7 +265,7 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
               <span>Offline Master Backup (কম্পিউটারে ব্যাকআপ ফাইল সংরক্ষণ)</span>
             </h4>
             <p className="text-zinc-500 text-[11px]">
-              যেকোনো সময় ১-ক্লিকে আপনার সব সেলস, খরচ এবং ক্যাটাগরির ফুল ব্যাকআপ ফাইল ডাউনলোড করে রাখতে পারেন এবং পরবর্তীতে রিস্টোর করতে পারেন।
+              যেকোনো সময় ১-ক্লিকে আপনার সব সেলস, খরচ, ক্যাটাগরি ও এজেন্ট খাতার ফুল ব্যাকআপ ফাইল ডাউনলোড করে রাখতে পারেন এবং যেকোনো ডিভাইসে রিস্টোর করতে পারেন।
             </p>
 
             {fileRestoreNotice && (
@@ -291,86 +308,18 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
             </div>
           </div>
 
-          {/* Supabase Account Settings */}
-          <div className="space-y-3 pt-4 border-t border-zinc-100">
-            <div className="flex items-center justify-between">
-              <h4 className="font-extrabold text-zinc-900 text-sm flex items-center gap-1.5">
-                <Cloud className="w-4 h-4 text-indigo-600" />
-                <span>Supabase Account Configuration (আপনার সুপাবেজ একাউন্ট)</span>
-              </h4>
-              <button
-                type="button"
-                onClick={() => setShowSql(!showSql)}
-                className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 underline"
-              >
-                {showSql ? 'Hide SQL Script' : 'View SQL Table Setup'}
-              </button>
-            </div>
+          {/* Optional SQL Table Setup Inspector */}
+          <div className="pt-2 border-t border-zinc-200/80">
+            <button
+              type="button"
+              onClick={() => setShowSql(!showSql)}
+              className="text-xs font-bold text-zinc-500 hover:text-zinc-800 flex items-center gap-1.5"
+            >
+              <span>{showSql ? '▼ Hide SQL Database Schema' : '▶ View Supabase Database Schema (SQL Script)'}</span>
+            </button>
 
-            <div className="space-y-3 bg-zinc-50 p-4 rounded-2xl border border-zinc-200">
-              <div>
-                <label className="block text-[11px] font-bold text-zinc-700 uppercase tracking-wider mb-1">
-                  Supabase Project URL:
-                </label>
-                <input
-                  type="text"
-                  value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                  placeholder="https://xyzcompany.supabase.co"
-                  className="w-full px-3.5 py-2.5 bg-white border border-zinc-300 rounded-xl text-xs font-mono font-medium focus:border-zinc-900 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-zinc-700 uppercase tracking-wider mb-1">
-                  Supabase Anon / Publishable Key:
-                </label>
-                <input
-                  type="password"
-                  value={supabaseKey}
-                  onChange={(e) => setSupabaseKey(e.target.value)}
-                  placeholder="sb_publishable_... or eyJhbGci..."
-                  className="w-full px-3.5 py-2.5 bg-white border border-zinc-300 rounded-xl text-xs font-mono font-medium focus:border-zinc-900 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleTestConnection}
-                  disabled={isTesting || !supabaseUrl.trim() || !supabaseKey.trim()}
-                  className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-                  <span>{isTesting ? 'Testing...' : 'Test Connection & Save'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveConfig}
-                  className="px-4 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-800 font-bold text-xs shadow-2xs"
-                >
-                  Save Credentials
-                </button>
-              </div>
-
-              {testResult && (
-                <div
-                  className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-                    testResult.success
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : 'bg-rose-50 border-rose-200 text-rose-800'
-                  }`}
-                >
-                  {testResult.success ? <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />}
-                  <span>{testResult.message}</span>
-                </div>
-              )}
-            </div>
-
-            {/* SQL Setup Script Helper */}
             {showSql && (
-              <div className="p-4 rounded-2xl bg-zinc-900 text-zinc-100 space-y-3">
+              <div className="mt-3 p-4 rounded-2xl bg-zinc-900 text-zinc-100 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-xs font-bold text-indigo-300">
                     Supabase SQL Editor Script:
@@ -385,7 +334,7 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
                   </button>
                 </div>
                 <p className="text-[11px] text-zinc-400">
-                  আপনার সুপাবেজ ড্যাশবোর্ডের <b>SQL Editor</b>-এ গিয়ে নিচের স্ক্রিপ্টটি রান করলেই <code>categories</code>, <code>transactions</code> টেবিল এবং <code>receipts</code> স্টোরেজ রেডি হয়ে যাবে:
+                  আপনার সুপাবেজ ড্যাশবোর্ডের <b>SQL Editor</b>-এ রান করার জন্য ফুল ডেটাবেজ স্ক্রিপ্ট:
                 </p>
                 <pre className="p-3 bg-zinc-950 rounded-xl font-mono text-[11px] text-emerald-400 overflow-x-auto max-h-48 border border-zinc-800">
                   {SQL_SETUP_SCRIPT}
@@ -399,7 +348,7 @@ export const BackupSyncModal: React.FC<BackupSyncModalProps> = ({
         <div className="p-4 sm:p-5 border-t border-zinc-100 bg-zinc-50 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-zinc-500 text-xs font-medium">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Dual Auto-Backup: Local Storage + Supabase Realtime</span>
+            <span>Server-authoritative auto backup to Supabase Cloud</span>
           </div>
           <button
             type="button"

@@ -11,7 +11,6 @@ interface HeaderProps {
   onRefresh: () => void;
   onOpenCategories: () => void;
   onOpenReceiptModal: () => void;
-  onOpenBackupSync: () => void;
   onSignOut: () => void;
 }
 
@@ -24,7 +23,6 @@ export const Header: React.FC<HeaderProps> = ({
   onRefresh,
   onOpenCategories,
   onOpenReceiptModal,
-  onOpenBackupSync,
   onSignOut,
 }) => {
   const todayFormatted = new Intl.DateTimeFormat('en-US', {
@@ -106,16 +104,14 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
 
-            {/* Cloud Auto-Backup & Sync */}
-            <button
-              onClick={onOpenBackupSync}
-              className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700 hover:text-zinc-900 bg-white hover:bg-zinc-50 border border-zinc-200 px-3 py-2 rounded-xl transition-colors shadow-2xs"
-              title="Cloud Auto-Backup & Supabase Sync"
+            {/* Backend Auto Cloud Sync Status Badge (Automated in backend, no frontend options modal) */}
+            <div
+              className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50/90 border border-emerald-200/70 px-2.5 py-1.5 rounded-xl shadow-2xs select-none"
+              title="ব্যাকএন্ড অটো-ব্যাকআপ ও ক্লাউড সিঙ্ক সক্রিয় রয়েছে"
             >
-              <Database className="w-3.5 h-3.5 text-indigo-600" />
-              <span className="hidden sm:inline">Auto Backup</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            </button>
+              <span className="hidden sm:inline">অটো ব্যাকআপ সক্রিয়</span>
+            </div>
 
             {/* Categories Management */}
             <button

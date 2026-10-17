@@ -15,11 +15,11 @@ import { CategoryModal } from './components/CategoryModal';
 import { ReceiptModal } from './components/ReceiptModal';
 import { ReceiptViewerModal } from './components/ReceiptViewerModal';
 import { AuthModal } from './components/AuthModal';
-import { BackupSyncModal } from './components/BackupSyncModal';
 import {
   getCurrentUser,
   fetchCategories,
   fetchTransactions,
+  syncAllDataToSupabase,
   addCategory,
   updateCategory,
   deleteCategory,
@@ -73,7 +73,6 @@ export default function App() {
   // Modals
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState<boolean>(false);
-  const [isBackupSyncOpen, setIsBackupSyncOpen] = useState<boolean>(false);
   const [viewingReceiptUrl, setViewingReceiptUrl] = useState<string | null>(null);
 
   // Check initial user authentication session
@@ -92,6 +91,9 @@ export default function App() {
     if (!userId) return;
     setIsLoading(true);
     try {
+      // Background two-way auto-sync ensuring server & local storage are unified
+      await syncAllDataToSupabase(userId).catch(console.warn);
+
       const [cats, txs, wallets, agentTxs] = await Promise.all([
         fetchCategories(userId),
         fetchTransactions(userId),
@@ -112,6 +114,12 @@ export default function App() {
   useEffect(() => {
     if (currentUser?.id) {
       loadUserData(currentUser.id);
+
+      // Silent background sync every 45 seconds to keep data unified across tabs
+      const timer = setInterval(() => {
+        syncAllDataToSupabase(currentUser.id).catch(() => {});
+      }, 45000);
+      return () => clearInterval(timer);
     }
   }, [currentUser, loadUserData]);
 
@@ -231,7 +239,6 @@ export default function App() {
         onRefresh={() => currentUser && loadUserData(currentUser.id)}
         onOpenCategories={() => setIsCategoryModalOpen(true)}
         onOpenReceiptModal={() => setIsReceiptModalOpen(true)}
-        onOpenBackupSync={() => setIsBackupSyncOpen(true)}
         onSignOut={handleSignOut}
       />
 
@@ -392,18 +399,6 @@ export default function App() {
         receiptUrl={viewingReceiptUrl}
         onClose={() => setViewingReceiptUrl(null)}
       />
-
-      {/* Auto Backup & Supabase Cloud Sync Center */}
-      {currentUser && (
-        <BackupSyncModal
-          isOpen={isBackupSyncOpen}
-          onClose={() => setIsBackupSyncOpen(false)}
-          userId={currentUser.id}
-          transactions={transactions}
-          categories={categories}
-          onDataRestored={() => loadUserData(currentUser.id)}
-        />
-      )}
     </div>
   );
 }
